@@ -205,6 +205,83 @@ int SandHypoplasticFortranDllLaw::Check(
         << "MATERIAL_PARAMETERS[14] (bulk_w, water bulk modulus) "
            "must be >= 0; got " << r_params[14] << "." << std::endl;
 
+    // Mirror the Fortran kernel's `factor fb not defined` STOP at
+    // sand_hypo_is.for line ~848. The kernel computes:
+    //     a     = sqrt(3) * (3 - sin(phi)) / (2*sqrt(2)*sin(phi))
+    //     temp1 = 3 + a^2 - a*sqrt(3) * ((ei0 - ed0)/(ec0 - ed0))^alpha
+    //     if (temp1 < 0)  STOP 'factor fb not defined'
+    // and the STOP is a raw process kill — it bypasses xit_h, pnewdt, and
+    // RKF rejection, so the round-10 TD-2 "caught indirectly via RKF" path
+    // does NOT cover it. Codex round-13 [medium]. Mirroring the formula
+    // here surfaces the violation as a recoverable KRATOS_ERROR with the
+    // offending values printed.
+    //
+    // phi at this point is in DEGREES (Kratos materials.json convention);
+    // the Fortran kernel converts deg -> rad inside check_parms_h
+    // (parms(1) = phi_deg * pi / 180), so we mirror the conversion before
+    // applying sin().
+    {
+        const double phi_deg = r_params[0];
+        const double hs      = r_params[2];
+        const double en      = r_params[3];
+        const double ed0     = r_params[4];
+        const double ec0     = r_params[5];
+        const double ei0     = r_params[6];
+        const double alpha   = r_params[7];
+
+        // Sanity checks for parameters that participate in temp1. These have
+        // no explicit Fortran domain check in check_parms_h but a degenerate
+        // value here makes temp1 either undefined or numerically meaningless.
+        KRATOS_ERROR_IF_NOT(hs > 0.0)
+            << "MATERIAL_PARAMETERS[2] (hs, granulate hardness) must be > 0 for "
+               "the Fortran kernel's barotropy formula; got " << hs << "." << std::endl;
+        KRATOS_ERROR_IF_NOT(en > 0.0)
+            << "MATERIAL_PARAMETERS[3] (n, barotropy exponent) must be > 0; got "
+            << en << "." << std::endl;
+        KRATOS_ERROR_IF_NOT(ed0 > 0.0 && ec0 > 0.0 && ei0 > 0.0)
+            << "MATERIAL_PARAMETERS[4..6] (e_d0, e_c0, e_i0) must all be > 0; got "
+            << ed0 << ", " << ec0 << ", " << ei0 << "." << std::endl;
+        KRATOS_ERROR_IF_NOT(ec0 > ed0)
+            << "MATERIAL_PARAMETERS: void-ratio ordering violated, must have "
+               "e_d0 < e_c0 (densest < critical); got e_d0 = " << ed0
+            << ", e_c0 = " << ec0 << ". (e_c0 - e_d0) appears in a denominator "
+               "of the Fortran factor-fb formula." << std::endl;
+        KRATOS_ERROR_IF_NOT(ei0 >= ed0)
+            << "MATERIAL_PARAMETERS: void-ratio ordering violated, must have "
+               "e_d0 <= e_i0 (densest <= initial-loosest); got e_d0 = " << ed0
+            << ", e_i0 = " << ei0 << "." << std::endl;
+        KRATOS_ERROR_IF_NOT(alpha > 0.0)
+            << "MATERIAL_PARAMETERS[7] (alpha, pyknotropy exponent) must be > 0; got "
+            << alpha << "." << std::endl;
+
+        const double pi = 4.0 * std::atan(1.0);
+        const double phi_rad = phi_deg * pi / 180.0;
+        const double sin_phi = std::sin(phi_rad);
+        // phi > 0 already guarded above, so sin_phi > 0 for any physical phi
+        // (small enough that we are below pi). Defend against numerically
+        // small phi just in case.
+        KRATOS_ERROR_IF(sin_phi <= 0.0)
+            << "MATERIAL_PARAMETERS[0] (phi) yields sin(phi) <= 0 after "
+               "deg->rad conversion (phi = " << phi_deg << " deg, phi_rad = "
+            << phi_rad << "). The factor-fb formula divides by sin(phi)." << std::endl;
+
+        const double sqrt3 = std::sqrt(3.0);
+        const double twosqrt2 = 2.0 * std::sqrt(2.0);
+        const double a = sqrt3 * (3.0 - sin_phi) / (twosqrt2 * sin_phi);
+        const double ratio = (ei0 - ed0) / (ec0 - ed0);
+        const double temp1 = 3.0 + a * a - a * sqrt3 * std::pow(ratio, alpha);
+
+        KRATOS_ERROR_IF(temp1 < 0.0)
+            << "MATERIAL_PARAMETERS produce a non-physical Fortran factor-fb: "
+               "temp1 = 3 + a^2 - a*sqrt(3)*((e_i0 - e_d0)/(e_c0 - e_d0))^alpha = "
+            << temp1 << " < 0. Diagnostics: phi = " << phi_deg
+            << " deg, a = " << a << ", (e_i0 - e_d0)/(e_c0 - e_d0) = " << ratio
+            << ", alpha = " << alpha
+            << ". Fortran kernel would STOP the entire Kratos process at "
+               "sand_hypo_is.for line ~848 ('factor fb not defined'); this "
+               "C++ guard converts that into a recoverable KRATOS_ERROR." << std::endl;
+    }
+
     // INITIAL_STRESS_VECTOR is recommended but not required: a missing or
     // zero initial stress is physically meaningful in some test setups
     // (e.g. the tensile_fallback case). Warn rather than error so the law
