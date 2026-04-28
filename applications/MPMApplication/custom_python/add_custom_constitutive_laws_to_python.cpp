@@ -68,6 +68,7 @@
 #include "custom_constitutive/johnson_cook_thermal_plastic_axisym_2D_law.hpp"
 #include "custom_constitutive/displacement_newtonian_fluid_3D_law.hpp"
 #include "custom_constitutive/displacement_newtonian_fluid_plane_strain_2D_law.hpp"
+#include "custom_constitutive/path_a_fortran_dll/sand_hypoplastic_fortran_dll_law.h"
 
 namespace Kratos{
 namespace Python{
@@ -227,6 +228,11 @@ namespace Python{
                 (m, "DispNewtonianFluidPlaneStrain2DLaw")
         .def(py::init<>())
             ;
+
+        // CL: Sand hypoplastic (Path A — dynamic-link Fortran UMAT)
+        py::class_< SandHypoplasticFortranDllLaw, typename SandHypoplasticFortranDllLaw::Pointer, ConstitutiveLaw >
+        (m, "SandHypoplasticFortranDllLaw").def(py::init<>())
+        ;
     }
 }  // namespace Python.
 }  // namespace Kratos.

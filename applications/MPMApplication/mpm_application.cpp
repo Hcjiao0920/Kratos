@@ -176,6 +176,9 @@ namespace Kratos
 
         // Registering consitutive law variables
         KRATOS_REGISTER_VARIABLE( CONSTITUTIVE_LAW_POINTER )
+        // CL: Sand hypoplastic (Path A) + generic initial stress
+        KRATOS_REGISTER_VARIABLE( SAND_HYPO_FORTRAN_DLL_PATH )
+        KRATOS_REGISTER_VARIABLE( INITIAL_STRESS_VECTOR )
         // CL: Solid
         KRATOS_REGISTER_VARIABLE( RAYLEIGH_ALPHA )
         KRATOS_REGISTER_VARIABLE( RAYLEIGH_BETA )
@@ -272,6 +275,8 @@ namespace Kratos
         // CL: Newtonian fluid
         KRATOS_REGISTER_CONSTITUTIVE_LAW("DispNewtonianFluid3DLaw", mDispNewtonianFluid3DLaw);
         KRATOS_REGISTER_CONSTITUTIVE_LAW("DispNewtonianFluidPlaneStrain2DLaw", mDispNewtonianFluidPlaneStrain2DLaw);
+        // CL: Sand hypoplastic (Path A — dynamic-link Fortran UMAT)
+        KRATOS_REGISTER_CONSTITUTIVE_LAW("SandHypoplasticFortranDllLaw", mSandHypoplasticFortranDllLaw);
 
         //Register Flow Rules
         Serializer::Register("MCPlasticFlowRule", mMCPlasticFlowRule);
