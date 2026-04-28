@@ -159,6 +159,19 @@ int SandHypoplasticFortranDllLaw::Check(
         << "MATERIAL_PARAMETERS must have >= 16 entries; got " << r_params.size() << "."
         << std::endl;
 
+    // Finite-value hygiene: NaN/Inf in MATERIAL_PARAMETERS would slip past
+    // the magnitude/sign comparisons below (NaN compares false to anything),
+    // then propagate into the UMAT and contaminate stress/state. Codex
+    // adversarial review 2026-04-29 round 11 Finding 2 — mirrors the J<=0
+    // guard pattern already used in CalculateMaterialResponseKirchhoff.
+    for (std::size_t i = 0; i < r_params.size() && i < 16; ++i) {
+        KRATOS_ERROR_IF_NOT(std::isfinite(r_params[i]))
+            << "MATERIAL_PARAMETERS[" << i << "] is non-finite (got "
+            << r_params[i] << "). NaN/Inf in material parameters cannot be "
+               "validated by domain checks and would propagate through the "
+               "UMAT into committed material history." << std::endl;
+    }
+
     // Mirror the Fortran kernel's check_parms_h domain checks BEFORE any UMAT
     // call. The kernel's xit_h on error=10 executes Fortran STOP, which
     // terminates the entire Kratos process; surfacing those rejections as
@@ -201,6 +214,11 @@ int SandHypoplasticFortranDllLaw::Check(
         KRATOS_ERROR_IF(s0.size() != 6)
             << "INITIAL_STRESS_VECTOR must have exactly 6 components in Kratos Voigt order "
                "[11,22,33,12,23,13]; got " << s0.size() << "." << std::endl;
+        for (std::size_t i = 0; i < s0.size(); ++i) {
+            KRATOS_ERROR_IF_NOT(std::isfinite(s0[i]))
+                << "INITIAL_STRESS_VECTOR[" << i << "] is non-finite (got " << s0[i]
+                << "). NaN/Inf cannot be a valid stress component." << std::endl;
+        }
     } else {
         KRATOS_WARNING_FIRST_N("SandHypoplasticFortranDllLaw", 1)
             << "Properties[INITIAL_STRESS_VECTOR] not provided; sigma_old defaults to 0. "
@@ -510,9 +528,23 @@ void SandHypoplasticFortranDllLaw::CalculateMaterialResponseKirchhoff(Parameters
         << ". Reduce the time-step / strain-increment magnitude or investigate "
            "the upstream element kinematics." << std::endl;
 
-    // ---- 3. DSTRAN = log(U_inc) in Kratos engineering-shear Voigt ----------
+    // ---- 3. DSTRAN = log(V_inc) in Kratos engineering-shear Voigt ----------
+    // Both stress (sigma_old) and intergranular strain are pre-rotated by
+    // R_inc into the new (rotated) lab frame before being passed to UMAT.
+    // The strain increment must be in the SAME frame for the UMAT's rate-form
+    // constitutive law to make sense. logU_inc is the right-stretch log
+    // (in F_inc's "old" frame); to bring it into the new lab frame we apply
+    // log(V) = R · log(U) · R^T (left-stretch log, by similarity).
+    //
+    // Codex adversarial review 2026-04-29 round 11 Finding 1: previously
+    // logU_inc was passed as-is, leaving DSTRAN in the unrotated frame
+    // while stress/state were rotated. Pure-stretch (R=I) and pure-rotation
+    // (logU=0) tests both miss this — the bug only fires for combined R·U.
+    // Verified by tests/path_a_results/test_combined_rotation_stretch.py.
+    Matrix logV_inc(3, 3);
+    noalias(logV_inc) = prod(R_inc, Matrix(prod(logU_inc, trans(R_inc))));
     Vector dstran_kratos(6);
-    StrainTensorToKratosVoigt(logU_inc, dstran_kratos);
+    StrainTensorToKratosVoigt(logV_inc, dstran_kratos);
 
     // ---- 4. Pre-rotate previous Cauchy by R_inc -> corotational frame ------
     Matrix sigma_old_lab(3, 3);
@@ -701,6 +733,28 @@ void SandHypoplasticFortranDllLaw::CalculateMaterialResponseKirchhoff(Parameters
             << ", trace(sigma_old) = "
             << (mStressVectorCauchyFinalized[0] + mStressVectorCauchyFinalized[1]
                 + mStressVectorCauchyFinalized[2]) << "." << std::endl;
+
+        // Finite-value hygiene on UMAT outputs (Codex round 11 Finding 2).
+        // Even with pnewdt = 1.0, NaN/Inf can leak from internal degeneracies
+        // (e.g. log of a near-zero void ratio, divide by p_t when p_t = 0).
+        // Catch them BEFORE writing to mStressVectorCauchyTrial / mStateVarsTrial.
+        for (int i = 0; i < 6; ++i) {
+            KRATOS_ERROR_IF_NOT(std::isfinite(stress_abq[i]))
+                << "SandHypoplasticFortranDllLaw: UMAT returned non-finite "
+                   "stress[" << i << "] = " << stress_abq[i]
+                << ". Trial state would be corrupted; rejecting step." << std::endl;
+        }
+        for (int i = 0; i < 15; ++i) {
+            KRATOS_ERROR_IF_NOT(std::isfinite(statev_abq[i]))
+                << "SandHypoplasticFortranDllLaw: UMAT returned non-finite "
+                   "statev[" << i << "] = " << statev_abq[i] << "." << std::endl;
+        }
+        for (int i = 0; i < 36; ++i) {
+            KRATOS_ERROR_IF_NOT(std::isfinite(ddsdde_local[i]))
+                << "SandHypoplasticFortranDllLaw: UMAT returned non-finite "
+                   "ddsdde[" << (i / 6) << "][" << (i % 6) << "] (column-major idx "
+                << i << ") = " << ddsdde_local[i] << "." << std::endl;
+        }
 
         // ---- 10. Decode UMAT output ---------------------------------------
         // 10a) stress: swap Abaqus -> Kratos (idx 4 <-> 5)
