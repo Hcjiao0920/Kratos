@@ -402,6 +402,24 @@ void SandHypoplasticFortranDllLaw::CalculateMaterialResponseKirchhoff(Parameters
     const Matrix& F_new = rValues.GetDeformationGradientF();
     const double  J_new = rValues.GetDeterminantF();
 
+    // Guard against non-physical / numerically broken kinematics. NaN, inf,
+    // and J <= 0 must hard-fail BEFORE polar decomposition. Polar-decomp
+    // alone cannot catch an inverted F because F^T·F is positive-definite
+    // for any nonsingular F (proper or improper); the eigensolver succeeds
+    // and produces an improper-rotation R with det(R) = -1, which would
+    // then be silently used to "co-rotate" stress. Codex adversarial review
+    // 2026-04-29 round 9 Finding 1.
+    KRATOS_ERROR_IF_NOT(std::isfinite(J_new))
+        << "SandHypoplasticFortranDllLaw: det(F_new) is non-finite ("
+        << J_new << "). Upstream element kinematics produced NaN/inf — the "
+           "constitutive update cannot proceed." << std::endl;
+    KRATOS_ERROR_IF(J_new <= 0.0)
+        << "SandHypoplasticFortranDllLaw: det(F_new) = " << J_new
+        << " is non-positive. The deformation gradient is inverted or singular; "
+           "no physical Cauchy stress can be defined for this configuration. "
+           "Reduce the time-step / strain-increment magnitude or investigate "
+           "the upstream element." << std::endl;
+
     Matrix F_old(3, 3);
     if (mInverseDeformationGradientF0.size1() == 3) {
         double det_F_old_inv;
@@ -419,6 +437,20 @@ void SandHypoplasticFortranDllLaw::CalculateMaterialResponseKirchhoff(Parameters
     } else {
         noalias(F_inc) = F_new;
     }
+
+    // Same guard for the increment determinant (catches incremental inversion
+    // even when both F_new and F_old are individually fine).
+    const double J_inc = MathUtils<double>::Det3(F_inc);
+    KRATOS_ERROR_IF_NOT(std::isfinite(J_inc))
+        << "SandHypoplasticFortranDllLaw: det(F_inc) is non-finite ("
+        << J_inc << "). Likely an inverse-of-singular-matrix in the upstream "
+           "F-history cache." << std::endl;
+    KRATOS_ERROR_IF(J_inc <= 0.0)
+        << "SandHypoplasticFortranDllLaw: det(F_inc) = " << J_inc
+        << " is non-positive. The incremental deformation gradient is inverted "
+           "(F-history vs current F crossed an inversion boundary). Cannot "
+           "proceed without producing an improper rotation in the polar "
+           "decomposition." << std::endl;
 
     Matrix R_inc(3, 3);
     Matrix logU_inc(3, 3);
@@ -685,11 +717,15 @@ void SandHypoplasticFortranDllLaw::CalculateMaterialResponseKirchhoff(Parameters
 void SandHypoplasticFortranDllLaw::CalculateMaterialResponseCauchy(Parameters& rValues)
 {
     // Compute the Kirchhoff response, then divide by J for the Cauchy slot.
+    // CalculateMaterialResponseKirchhoff already KRATOS_ERRORs on
+    // non-finite or non-positive det(F_new) (see Finding 1 guards above),
+    // so by the time we get here J is guaranteed strictly positive and
+    // finite. No silent J <= 0 fallback — invalid kinematics must surface.
     CalculateMaterialResponseKirchhoff(rValues);
 
     Flags& r_options = rValues.GetOptions();
     const double J = rValues.GetDeterminantF();
-    const double inv_J = (J > 0.0) ? (1.0 / J) : 1.0;
+    const double inv_J = 1.0 / J;
 
     if (r_options.Is(ConstitutiveLaw::COMPUTE_STRESS)) {
         rValues.GetStressVector() *= inv_J;
