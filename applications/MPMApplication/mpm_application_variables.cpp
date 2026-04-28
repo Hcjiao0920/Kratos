@@ -48,9 +48,6 @@ namespace Kratos
     // CL: Sand hypoplastic (Path A — dynamic-link Fortran UMAT bridge)
     KRATOS_CREATE_VARIABLE( std::string, SAND_HYPO_FORTRAN_DLL_PATH )
 
-    // Generic initial Cauchy stress vector
-    KRATOS_CREATE_VARIABLE( Vector, INITIAL_STRESS_VECTOR )
-
     // Constitutive Law
     KRATOS_CREATE_VARIABLE( ConstitutiveLaw::Pointer, CONSTITUTIVE_LAW_POINTER )
     // CL: Solid

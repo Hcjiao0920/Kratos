@@ -82,11 +82,6 @@ namespace Kratos
     // CL: Sand hypoplastic (Path A — dynamic-link Fortran UMAT bridge)
     KRATOS_DEFINE_APPLICATION_VARIABLE( MPM_APPLICATION, std::string, SAND_HYPO_FORTRAN_DLL_PATH )
 
-    // Generic initial Cauchy stress vector for stress-state-dependent constitutive
-    // models (sand hypoplastic, etc.). 6 components, Kratos Voigt order
-    // [11, 22, 33, 12, 23, 13], tension-positive sign convention.
-    KRATOS_DEFINE_APPLICATION_VARIABLE( MPM_APPLICATION, Vector, INITIAL_STRESS_VECTOR )
-
     // Constitutive law
     KRATOS_DEFINE_APPLICATION_VARIABLE( MPM_APPLICATION, ConstitutiveLaw::Pointer, CONSTITUTIVE_LAW_POINTER )
     // CL: Solid

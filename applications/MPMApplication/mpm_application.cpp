@@ -176,9 +176,8 @@ namespace Kratos
 
         // Registering consitutive law variables
         KRATOS_REGISTER_VARIABLE( CONSTITUTIVE_LAW_POINTER )
-        // CL: Sand hypoplastic (Path A) + generic initial stress
+        // CL: Sand hypoplastic (Path A — dynamic-link Fortran UMAT)
         KRATOS_REGISTER_VARIABLE( SAND_HYPO_FORTRAN_DLL_PATH )
-        KRATOS_REGISTER_VARIABLE( INITIAL_STRESS_VECTOR )
         // CL: Solid
         KRATOS_REGISTER_VARIABLE( RAYLEIGH_ALPHA )
         KRATOS_REGISTER_VARIABLE( RAYLEIGH_BETA )

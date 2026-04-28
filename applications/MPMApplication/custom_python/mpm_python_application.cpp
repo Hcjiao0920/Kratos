@@ -133,9 +133,8 @@ namespace Python{
         // Stabilization variables
         KRATOS_REGISTER_IN_PYTHON_VARIABLE(m, STABILIZATION_TYPE);
 
-        // CL: Sand hypoplastic (Path A) + generic initial stress
+        // CL: Sand hypoplastic (Path A — dynamic-link Fortran UMAT)
         KRATOS_REGISTER_IN_PYTHON_VARIABLE(m, SAND_HYPO_FORTRAN_DLL_PATH);
-        KRATOS_REGISTER_IN_PYTHON_VARIABLE(m, INITIAL_STRESS_VECTOR);
 
         // For friction
         KRATOS_REGISTER_IN_PYTHON_3D_VARIABLE_WITH_COMPONENTS(m, STICK_FORCE);
