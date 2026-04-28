@@ -159,6 +159,39 @@ int SandHypoplasticFortranDllLaw::Check(
         << "MATERIAL_PARAMETERS must have >= 16 entries; got " << r_params.size() << "."
         << std::endl;
 
+    // Mirror the Fortran kernel's check_parms_h domain checks BEFORE any UMAT
+    // call. The kernel's xit_h on error=10 executes Fortran STOP, which
+    // terminates the entire Kratos process; surfacing those rejections as
+    // KRATOS_ERROR here makes them recoverable. Codex adversarial review
+    // 2026-04-29 round 10 Finding 1 / TD-2 closure. The 8 checked params
+    // match the Fortran source 1-for-1; other slots (hs, en, ed0, ec0, ei0,
+    // alpha, beta, e0_param) have no explicit Fortran domain check, so we
+    // pass them through. Slot indices match project_umat_model.md.
+    KRATOS_ERROR_IF(r_params[0] <= 0.0)
+        << "MATERIAL_PARAMETERS[0] (phi, friction angle in degrees) must be > 0; got "
+        << r_params[0] << "." << std::endl;
+    KRATOS_ERROR_IF(r_params[1] < 0.0)
+        << "MATERIAL_PARAMETERS[1] (p_t, tension cut-off) must be >= 0; got "
+        << r_params[1] << "." << std::endl;
+    KRATOS_ERROR_IF(r_params[9] < 0.0)
+        << "MATERIAL_PARAMETERS[9] (m_R, intergranular-strain reversal stiffness multiplier) "
+           "must be >= 0; got " << r_params[9] << "." << std::endl;
+    KRATOS_ERROR_IF(r_params[10] < 0.0)
+        << "MATERIAL_PARAMETERS[10] (m_T, intergranular-strain 90-degree multiplier) "
+           "must be >= 0; got " << r_params[10] << "." << std::endl;
+    KRATOS_ERROR_IF(r_params[11] < 0.0)
+        << "MATERIAL_PARAMETERS[11] (r_uc, intergranular-strain reference length) "
+           "must be >= 0; got " << r_params[11] << "." << std::endl;
+    KRATOS_ERROR_IF(r_params[12] < 0.0)
+        << "MATERIAL_PARAMETERS[12] (beta_r, intergranular-strain evolution exponent) "
+           "must be >= 0; got " << r_params[12] << "." << std::endl;
+    KRATOS_ERROR_IF(r_params[13] < 0.0)
+        << "MATERIAL_PARAMETERS[13] (chi, intergranular-strain interpolation exponent) "
+           "must be >= 0; got " << r_params[13] << "." << std::endl;
+    KRATOS_ERROR_IF(r_params[14] < 0.0)
+        << "MATERIAL_PARAMETERS[14] (bulk_w, water bulk modulus) "
+           "must be >= 0; got " << r_params[14] << "." << std::endl;
+
     // INITIAL_STRESS_VECTOR is recommended but not required: a missing or
     // zero initial stress is physically meaningful in some test setups
     // (e.g. the tensile_fallback case). Warn rather than error so the law
@@ -185,6 +218,15 @@ void SandHypoplasticFortranDllLaw::InitializeMaterial(
     const GeometryType& rElementGeometry,
     const Vector& rShapeFunctionsValues)
 {
+    // Defense-in-depth: run the same validation Check() does, so callers that
+    // skip Kratos's normal Check stage (e.g. standalone test drivers) cannot
+    // sneak invalid material parameters into the UMAT call. ProcessInfo is
+    // unused by our Check; pass a default-constructed one.
+    {
+        const ProcessInfo dummy_info;
+        Check(rMaterialProperties, rElementGeometry, dummy_info);
+    }
+
     HyperElastic3DLaw::InitializeMaterial(
         rMaterialProperties, rElementGeometry, rShapeFunctionsValues);
 
