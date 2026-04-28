@@ -885,6 +885,32 @@ void SandHypoplasticFortranDllLaw::CalculateMaterialResponseKirchhoff(Parameters
         if (r_C.size1() != 6 || r_C.size2() != 6) r_C.resize(6, 6, false);
         noalias(r_C) = C_kirchhoff;
     }
+
+    // ---- 12. Explicit-MPM commit hook --------------------------------------
+    // Codex round-15 [high]: Kratos MPM has TWO solver families and the
+    // explicit one (CALCULATE_EXPLICIT_MP_STRESS, used for slope collapse,
+    // granular flow, runout, pile driving — the canonical sand-hypoplastic
+    // MPM use cases) does NOT call FinalizeMaterialResponse; it only calls
+    // CalculateMaterialResponse and then commits the element's stress
+    // (mpm_updated_lagrangian.cpp:1496-1503). If we left commit only in
+    // Finalize* (round-12 D7), an explicit run would integrate from stale
+    // finalized state every step (sigma_old stuck at INITIAL_STRESS_VECTOR,
+    // F-history inverse never refreshed) and silently corrupt physics.
+    //
+    // Implicit drivers leave IS_EXPLICIT unset/false. Kratos's implicit
+    // FinalizeSolutionStep KRATOS_ERRORs if IS_EXPLICIT is true
+    // (mpm_updated_lagrangian.cpp:882-883), so the two paths cannot mix
+    // and double-commit cannot happen under valid Kratos workflow. If a
+    // unit test forces both (set IS_EXPLICIT=true AND call Finalize), the
+    // commit is idempotent — same trial, same F_new, same inverse.
+    {
+        const ProcessInfo& r_info_for_commit = rValues.GetProcessInfo();
+        const bool is_explicit = r_info_for_commit.Has(IS_EXPLICIT)
+                              && r_info_for_commit.GetValue(IS_EXPLICIT);
+        if (is_explicit) {
+            CommitTrialAndRollFHistory(rValues);
+        }
+    }
 }
 
 void SandHypoplasticFortranDllLaw::CalculateMaterialResponseCauchy(Parameters& rValues)
