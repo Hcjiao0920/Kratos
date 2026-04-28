@@ -831,10 +831,11 @@ void SandHypoplasticFortranDllLaw::CalculateMaterialResponseCauchy(Parameters& r
     }
 }
 
-void SandHypoplasticFortranDllLaw::FinalizeMaterialResponseKirchhoff(Parameters& rValues)
+void SandHypoplasticFortranDllLaw::CommitTrialAndRollFHistory(Parameters& rValues)
 {
-    // Commit the trial state computed during the latest CalculateMaterialResponse
-    // call, and roll the F-history forward.
+    // Commit the trial state produced by the latest CalculateMaterialResponse
+    // (which both finalize overrides re-trigger at the finalize-time F so the
+    // trial cache is guaranteed to match the F that the element commits).
     mStressVectorCauchyFinalized = mStressVectorCauchyTrial;
     mStateVarsFinalized          = mStateVarsTrial;
 
@@ -846,9 +847,44 @@ void SandHypoplasticFortranDllLaw::FinalizeMaterialResponseKirchhoff(Parameters&
     mDeterminantF0 = det_F_new;
 }
 
+void SandHypoplasticFortranDllLaw::FinalizeMaterialResponseKirchhoff(Parameters& rValues)
+{
+    // Codex round-12 [high]: MPMUpdatedLagrangian::FinalizeSolutionStep builds
+    // a *fresh* GeneralVariables + ConstitutiveLaw::Parameters, calls
+    // FinalizeMaterialResponse(Values, ...), and then commits Values.StressVector
+    // straight into mMP.cauchy_stress_vector. The previous override only
+    // committed our private trial cache and never wrote rValues.GetStressVector(),
+    // so every material point's persisted stress (VTK output, restart) was
+    // whatever InitializeGeneralVariables had left in the buffer. The 9 unit
+    // tests passed only because they reused one Parameters instance across
+    // Calculate and Finalize.
+    //
+    // Mirror the parent HyperElastic3DLaw three-stage pattern: set the
+    // FINALIZE_MATERIAL_RESPONSE flag, re-run Calculate at the finalize-time F
+    // (this populates rValues.GetStressVector() AND refreshes our trial cache
+    // for the *exact* final F, even when the last NL-iteration Calculate was
+    // at a slightly different trial F), then commit trial -> finalized and
+    // roll the F-history. Calculate is deterministic in F + finalized state,
+    // so re-calling is idempotent.
+    rValues.Set(ConstitutiveLaw::FINALIZE_MATERIAL_RESPONSE);
+    this->CalculateMaterialResponseKirchhoff(rValues);
+    rValues.Reset(ConstitutiveLaw::FINALIZE_MATERIAL_RESPONSE);
+
+    CommitTrialAndRollFHistory(rValues);
+}
+
 void SandHypoplasticFortranDllLaw::FinalizeMaterialResponseCauchy(Parameters& rValues)
 {
-    FinalizeMaterialResponseKirchhoff(rValues);
+    // MPMUpdatedLagrangian invokes FinalizeMaterialResponse with
+    // StressMeasure_Cauchy (mpm_updated_lagrangian.cpp:545,906), so this is
+    // the override that actually drives MPM's persisted stress. Route through
+    // the Cauchy variant of Calculate so rValues.GetStressVector() is the
+    // Cauchy stress (not Kirchhoff).
+    rValues.Set(ConstitutiveLaw::FINALIZE_MATERIAL_RESPONSE);
+    this->CalculateMaterialResponseCauchy(rValues);
+    rValues.Reset(ConstitutiveLaw::FINALIZE_MATERIAL_RESPONSE);
+
+    CommitTrialAndRollFHistory(rValues);
 }
 
 // ----- DLL loader (copied from GMA SmallStrainUMAT3DLaw, renamed) ----------

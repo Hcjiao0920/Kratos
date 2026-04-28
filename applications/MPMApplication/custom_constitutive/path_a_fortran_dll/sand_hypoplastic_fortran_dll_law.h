@@ -116,6 +116,13 @@ public:
     void FinalizeMaterialResponseKirchhoff(Parameters& rValues) override;
     void FinalizeMaterialResponseCauchy(Parameters& rValues) override;
 
+    // Helper used by both finalize overrides after the post-Calculate
+    // recompute: copy trial state into the finalized slots and roll the
+    // F-history forward. Kept outside the overrides so the three-stage
+    // (set flag -> Calculate -> reset flag -> commit) shape stays
+    // visible at a glance.
+    void CommitTrialAndRollFHistory(Parameters& rValues);
+
     std::string Info() const override { return "SandHypoplasticFortranDllLaw"; }
     void PrintInfo(std::ostream& rOStream) const override { rOStream << Info(); }
 
