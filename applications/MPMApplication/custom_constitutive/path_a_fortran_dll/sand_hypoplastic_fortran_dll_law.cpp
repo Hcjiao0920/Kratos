@@ -1041,6 +1041,57 @@ void SandHypoplasticFortranDllLaw::EnsureUmatLoaded(const Properties& rMaterialP
         << "SandHypoplasticFortranDllLaw: failed to resolve umat_ from "
         << dll_path << std::endl;
 
+    // Codex round-16 [high]: verify the DLL was built from the Path A
+    // patched fork (which exports path_a_marker_) rather than the pristine
+    // 00_hypo_is_original.for. Pristine root has no marker; loading it
+    // would silently swallow RKF rejections — the kernel restores y_n on
+    // error=3 but pnewdt stays at 1.0, so our `pnewdt < 1.0` guard never
+    // fires and bad trial state gets committed as "successful". Fail loud
+    // here, before any constitutive call, so the bridge contract cannot
+    // be quietly violated by a stray pristine-root build.
+    {
+        void* marker_fp = nullptr;
+#ifdef KRATOS_COMPILED_IN_WINDOWS
+        marker_fp = reinterpret_cast<void*>(::GetProcAddress(
+            static_cast<HMODULE>(s_dll_handle), "path_a_marker_"));
+#elif defined(KRATOS_COMPILED_IN_LINUX) || defined(KRATOS_COMPILED_IN_OS)
+        marker_fp = ::dlsym(s_dll_handle, "path_a_marker_");
+#endif
+        if (marker_fp == nullptr) {
+            // Codex round-19 [low]: release the OS-level DLL handle BEFORE
+            // raising. Without FreeLibrary/dlclose, Windows keeps the bad
+            // DLL mapped and locks the file on disk — the diagnostic below
+            // tells the user to rebuild, but build_dll.bat's atomic-swap
+            // (`move /y temp.dll dll`) would then fail because the live
+            // DLL is still locked. Save the handle, clear our statics,
+            // then unload (so a future EnsureUmatLoaded sees a clean cache
+            // even if dlclose itself misbehaves).
+            void* h_to_release = s_dll_handle;
+            s_umat_ptr   = nullptr;
+            s_dll_handle = nullptr;
+#ifdef KRATOS_COMPILED_IN_WINDOWS
+            if (h_to_release != nullptr) {
+                ::FreeLibrary(static_cast<HMODULE>(h_to_release));
+            }
+#elif defined(KRATOS_COMPILED_IN_LINUX) || defined(KRATOS_COMPILED_IN_OS)
+            if (h_to_release != nullptr) {
+                ::dlclose(h_to_release);
+            }
+#endif
+            KRATOS_ERROR
+                << "SandHypoplasticFortranDllLaw: DLL at '" << dll_path << "' "
+                   "is missing the path_a_marker_ ABI symbol. This means it "
+                   "was built from the pristine 00_hypo_is_original.for "
+                   "instead of the Path A patched fork "
+                   "(custom_constitutive/path_a_fortran_dll/fortran/sand_hypo_is.for). "
+                   "Pristine root lacks the PLAXIS-mode-off and pnewdt=0.25 "
+                   "rejection-signal patches, so loading it would silently "
+                   "swallow RKF integration failures and commit wrong trial "
+                   "state as 'successful'. Rebuild via "
+                   "custom_constitutive/path_a_fortran_dll/fortran/build_dll.bat." << std::endl;
+        }
+    }
+
     s_loaded_dll_path = dll_path;
     mUmatResolved     = true;
 }
@@ -1073,6 +1124,9 @@ bool SandHypoplasticFortranDllLaw::LoadUmatWindows(const std::string& rDllPath)
         KRATOS_INFO("SandHypoplasticFortranDllLaw")
             << "GetProcAddress(\"umat_\") failed in " << rDllPath
             << " (GetLastError=" << ::GetLastError() << ")" << std::endl;
+        // Codex round-19 [low]: release the handle on validation failure
+        // so the file is not left locked on Windows.
+        ::FreeLibrary(h);
         return false;
     }
 
@@ -1107,6 +1161,8 @@ bool SandHypoplasticFortranDllLaw::LoadUmatLinux(const std::string& rDllPath)
     if (!fp) {
         KRATOS_INFO("SandHypoplasticFortranDllLaw")
             << "dlsym(\"umat_\") failed in " << rDllPath << ": " << ::dlerror() << std::endl;
+        // Codex round-19 [low]: release the handle on validation failure.
+        ::dlclose(h);
         return false;
     }
 
