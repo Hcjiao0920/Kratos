@@ -76,7 +76,6 @@
 #include "custom_constitutive/hencky_borja_cam_clay_axisym_2D_law.hpp"
 #include "custom_constitutive/displacement_newtonian_fluid_3D_law.hpp"
 #include "custom_constitutive/displacement_newtonian_fluid_plane_strain_2D_law.hpp"
-#include "custom_constitutive/path_a_fortran_dll/sand_hypoplastic_fortran_dll_law.h"
 
 //---flow rules
 #include "custom_constitutive/flow_rules/mc_plastic_flow_rule.hpp"
@@ -301,8 +300,6 @@ private:
     // CL: Displacement-based Newtonian Fluid
     const DispNewtonianFluid3DLaw                           mDispNewtonianFluid3DLaw;
     const DispNewtonianFluidPlaneStrain2DLaw                mDispNewtonianFluidPlaneStrain2DLaw;
-    // CL: Sand hypoplastic (Path A — dynamic-link Fortran UMAT)
-    const SandHypoplasticFortranDllLaw                      mSandHypoplasticFortranDllLaw;
     // Flow Rules
     const MCPlasticFlowRule                         mMCPlasticFlowRule;
     const MCStrainSofteningPlasticFlowRule          mMCStrainSofteningPlasticFlowRule;

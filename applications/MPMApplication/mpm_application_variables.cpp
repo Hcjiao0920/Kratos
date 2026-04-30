@@ -45,8 +45,6 @@ namespace Kratos
     KRATOS_CREATE_VARIABLE(bool, IS_COMPRESSIBLE)
     KRATOS_CREATE_VARIABLE(bool, IS_MIXED_FORMULATION)
 
-    // CL: Sand hypoplastic (Path A — dynamic-link Fortran UMAT bridge)
-    KRATOS_CREATE_VARIABLE( std::string, SAND_HYPO_FORTRAN_DLL_PATH )
 
     // Constitutive Law
     KRATOS_CREATE_VARIABLE( ConstitutiveLaw::Pointer, CONSTITUTIVE_LAW_POINTER )

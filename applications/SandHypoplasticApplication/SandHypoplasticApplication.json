@@ -1,0 +1,6 @@
+{
+    "name": "SandHypoplasticApplication",
+    "license": "BSD",
+    "author": "Project-local sand hypoplastic migration",
+    "description": "Hosts parallel sand-hypoplastic constitutive-law paths outside MPMApplication."
+}

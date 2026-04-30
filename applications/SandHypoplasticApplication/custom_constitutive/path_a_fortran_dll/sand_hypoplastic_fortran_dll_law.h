@@ -60,7 +60,7 @@ using SandHypoFortranUmatPtr = void (*)(
     int*    noel, int* npt, int* layer, int* kspt, int* kstep, int* kinc,
     std::size_t cmname_len);
 
-class KRATOS_API(MPM_APPLICATION) SandHypoplasticFortranDllLaw
+class KRATOS_API(SAND_HYPOPLASTIC_APPLICATION) SandHypoplasticFortranDllLaw
     : public HyperElastic3DLaw
 {
 public:

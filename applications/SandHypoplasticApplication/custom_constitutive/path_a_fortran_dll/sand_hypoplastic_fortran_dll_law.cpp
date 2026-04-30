@@ -34,6 +34,7 @@
 // Application includes
 #include "custom_constitutive/path_a_fortran_dll/sand_hypoplastic_fortran_dll_law.h"
 #include "mpm_application_variables.h"
+#include "sand_hypoplastic_application_variables.h"
 
 // Platform DLL loader
 #ifdef KRATOS_COMPILED_IN_WINDOWS
@@ -393,10 +394,17 @@ void SandHypoplasticFortranDllLaw::ResetMaterial(
 //   * Stored Cauchy stress is sigma in spatial (lab) frame. The bridge
 //     pre-rotates it by R_inc (polar decomp of F_inc = F_new * F_old^-1)
 //     into the corotational frame the UMAT expects.
-//   * `mStateVarsTrial[0..5]` holds the intergranular strain in Abaqus
-//     component order (matching the Fortran `define_h` convention) so the
-//     UMAT call is just a memcpy + 4<->5 swap. We swap back into Kratos
-//     order only when the value is exposed externally.
+//   * `mStateVarsTrial[0..5]` and `mStateVarsFinalized[0..5]` hold the
+//     intergranular strain in **Kratos** Voigt order [xx,yy,zz,xy,yz,xz].
+//     The Voigt 4<->5 swap to/from Abaqus order is performed only inside
+//     CalculateMaterialResponseKirchhoff around the UMAT call: swap to
+//     Abaqus order before invoking `umat_`, swap back to Kratos order
+//     before storing the kernel's output into `mStateVarsTrial` (cpp
+//     line ~842). Consequence: any code reading these members --
+//     including `GetValue(INTERNAL_VARIABLES)` and any external test
+//     driver -- sees Kratos order and must NOT swap again. (Codex
+//     2026-04-30 review caught a comment-vs-code drift here that had
+//     misled the Path A reference-case driver into a double-swap.)
 
 namespace
 {

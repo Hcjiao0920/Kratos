@@ -21,24 +21,6 @@ file(GLOB_RECURSE KRATOS_MPM_APPLICATION_CORE
     ${CMAKE_CURRENT_SOURCE_DIR}/custom_io/*.cpp
 )
 
-# --- Path A patch (Codex round-29 [medium]): re-glob with
-# CONFIGURE_DEPENDS so new files copied under
-# custom_constitutive/path_*/ by sync.bat are picked up by
-# `cmake --build` without a manual cmake reconfigure.
-# SAND_HYPO_PATH_A_CONFIGURE_DEPENDS_CORE
-file(GLOB_RECURSE KRATOS_MPM_APPLICATION_CORE CONFIGURE_DEPENDS
-    ${CMAKE_CURRENT_SOURCE_DIR}/mpm_application.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/mpm_application_variables.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/custom_conditions/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/custom_constitutive/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/custom_elements/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/custom_modelers/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/custom_processes/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/custom_strategies/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/custom_utilities/*.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/custom_io/*.cpp
-)
-
 # If there is mpi support, use..
 if((${USE_MPI} MATCHES ON) )
   file( GLOB KRATOS_MPM_APPLICATION_CORE ${KRATOS_MPM_APPLICATION_CORE}
@@ -48,10 +30,6 @@ endif((${USE_MPI} MATCHES ON) )
 
 # Define python interface sources
 file(GLOB_RECURSE KRATOS_MPM_APPLICATION_PYTHON_INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/custom_python/*.cpp)
-# --- Path A patch (Codex round-29 [medium]): re-glob with CONFIGURE_DEPENDS
-# SAND_HYPO_PATH_A_CONFIGURE_DEPENDS_PYTHON
-file(GLOB_RECURSE KRATOS_MPM_APPLICATION_PYTHON_INTERFACE CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/custom_python/*.cpp)
-
 # Generate variables with the testing sources
 if(${KRATOS_BUILD_TESTING} MATCHES ON)
   file(GLOB_RECURSE KRATOS_MPM_APPLICATION_TESTING_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpp_tests/*.cpp)
