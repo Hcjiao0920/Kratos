@@ -58,6 +58,33 @@ SandHypoFortranUmatPtr SandHypoplasticFortranDllLaw::s_umat_ptr        = nullptr
 void*                  SandHypoplasticFortranDllLaw::s_dll_handle      = nullptr;
 std::string            SandHypoplasticFortranDllLaw::s_loaded_dll_path = "";
 
+namespace
+{
+
+const Vector& GetSandHypoplasticParameters(const Properties& rMaterialProperties)
+{
+    if (rMaterialProperties.Has(SAND_HYPOPLASTIC_PROPS_16)) {
+        return rMaterialProperties[SAND_HYPOPLASTIC_PROPS_16];
+    }
+
+    KRATOS_ERROR_IF_NOT(rMaterialProperties.Has(MATERIAL_PARAMETERS))
+        << "SandHypoplasticFortranDllLaw requires Properties[SAND_HYPOPLASTIC_PROPS_16] "
+        << "(preferred shared A/B/C 16-parameter vector) or legacy "
+        << "Properties[MATERIAL_PARAMETERS]. See project_umat_model.md for the "
+        << "slot layout." << std::endl;
+
+    return rMaterialProperties[MATERIAL_PARAMETERS];
+}
+
+const char* GetSandHypoplasticParametersName(const Properties& rMaterialProperties)
+{
+    return rMaterialProperties.Has(SAND_HYPOPLASTIC_PROPS_16)
+        ? "SAND_HYPOPLASTIC_PROPS_16"
+        : "MATERIAL_PARAMETERS";
+}
+
+} // unnamed namespace
+
 // ----- Construction / cloning ----------------------------------------------
 
 SandHypoplasticFortranDllLaw::SandHypoplasticFortranDllLaw()
@@ -150,24 +177,20 @@ int SandHypoplasticFortranDllLaw::Check(
         << "SandHypoplasticFortranDllLaw requires Properties[SAND_HYPO_FORTRAN_DLL_PATH] "
         << "(absolute or build-relative path to sand_hypo_is.dll)." << std::endl;
 
-    KRATOS_ERROR_IF_NOT(rMaterialProperties.Has(MATERIAL_PARAMETERS))
-        << "SandHypoplasticFortranDllLaw requires Properties[MATERIAL_PARAMETERS] "
-        << "containing the 16 von Wolffersdorff + Niemunis-Herle parameters "
-        << "(see project_umat_model.md for the slot layout)." << std::endl;
-
-    const Vector& r_params = rMaterialProperties[MATERIAL_PARAMETERS];
+    const Vector& r_params = GetSandHypoplasticParameters(rMaterialProperties);
+    const char* param_name = GetSandHypoplasticParametersName(rMaterialProperties);
     KRATOS_ERROR_IF(r_params.size() < 16)
-        << "MATERIAL_PARAMETERS must have >= 16 entries; got " << r_params.size() << "."
+        << param_name << " must have >= 16 entries; got " << r_params.size() << "."
         << std::endl;
 
-    // Finite-value hygiene: NaN/Inf in MATERIAL_PARAMETERS would slip past
+    // Finite-value hygiene: NaN/Inf in the parameter vector would slip past
     // the magnitude/sign comparisons below (NaN compares false to anything),
     // then propagate into the UMAT and contaminate stress/state. Codex
     // adversarial review 2026-04-29 round 11 Finding 2 — mirrors the J<=0
     // guard pattern already used in CalculateMaterialResponseKirchhoff.
     for (std::size_t i = 0; i < r_params.size() && i < 16; ++i) {
         KRATOS_ERROR_IF_NOT(std::isfinite(r_params[i]))
-            << "MATERIAL_PARAMETERS[" << i << "] is non-finite (got "
+            << param_name << "[" << i << "] is non-finite (got "
             << r_params[i] << "). NaN/Inf in material parameters cannot be "
                "validated by domain checks and would propagate through the "
                "UMAT into committed material history." << std::endl;
@@ -182,28 +205,28 @@ int SandHypoplasticFortranDllLaw::Check(
     // alpha, beta, e0_param) have no explicit Fortran domain check, so we
     // pass them through. Slot indices match project_umat_model.md.
     KRATOS_ERROR_IF(r_params[0] <= 0.0)
-        << "MATERIAL_PARAMETERS[0] (phi, friction angle in degrees) must be > 0; got "
+        << param_name << "[0] (phi, friction angle in degrees) must be > 0; got "
         << r_params[0] << "." << std::endl;
     KRATOS_ERROR_IF(r_params[1] < 0.0)
-        << "MATERIAL_PARAMETERS[1] (p_t, tension cut-off) must be >= 0; got "
+        << param_name << "[1] (p_t, tension cut-off) must be >= 0; got "
         << r_params[1] << "." << std::endl;
     KRATOS_ERROR_IF(r_params[9] < 0.0)
-        << "MATERIAL_PARAMETERS[9] (m_R, intergranular-strain reversal stiffness multiplier) "
+        << param_name << "[9] (m_R, intergranular-strain reversal stiffness multiplier) "
            "must be >= 0; got " << r_params[9] << "." << std::endl;
     KRATOS_ERROR_IF(r_params[10] < 0.0)
-        << "MATERIAL_PARAMETERS[10] (m_T, intergranular-strain 90-degree multiplier) "
+        << param_name << "[10] (m_T, intergranular-strain 90-degree multiplier) "
            "must be >= 0; got " << r_params[10] << "." << std::endl;
     KRATOS_ERROR_IF(r_params[11] < 0.0)
-        << "MATERIAL_PARAMETERS[11] (r_uc, intergranular-strain reference length) "
+        << param_name << "[11] (r_uc, intergranular-strain reference length) "
            "must be >= 0; got " << r_params[11] << "." << std::endl;
     KRATOS_ERROR_IF(r_params[12] < 0.0)
-        << "MATERIAL_PARAMETERS[12] (beta_r, intergranular-strain evolution exponent) "
+        << param_name << "[12] (beta_r, intergranular-strain evolution exponent) "
            "must be >= 0; got " << r_params[12] << "." << std::endl;
     KRATOS_ERROR_IF(r_params[13] < 0.0)
-        << "MATERIAL_PARAMETERS[13] (chi, intergranular-strain interpolation exponent) "
+        << param_name << "[13] (chi, intergranular-strain interpolation exponent) "
            "must be >= 0; got " << r_params[13] << "." << std::endl;
     KRATOS_ERROR_IF(r_params[14] < 0.0)
-        << "MATERIAL_PARAMETERS[14] (bulk_w, water bulk modulus) "
+        << param_name << "[14] (bulk_w, water bulk modulus) "
            "must be >= 0; got " << r_params[14] << "." << std::endl;
 
     // Mirror the Fortran kernel's `factor fb not defined` STOP at
@@ -234,25 +257,25 @@ int SandHypoplasticFortranDllLaw::Check(
         // no explicit Fortran domain check in check_parms_h but a degenerate
         // value here makes temp1 either undefined or numerically meaningless.
         KRATOS_ERROR_IF_NOT(hs > 0.0)
-            << "MATERIAL_PARAMETERS[2] (hs, granulate hardness) must be > 0 for "
+            << param_name << "[2] (hs, granulate hardness) must be > 0 for "
                "the Fortran kernel's barotropy formula; got " << hs << "." << std::endl;
         KRATOS_ERROR_IF_NOT(en > 0.0)
-            << "MATERIAL_PARAMETERS[3] (n, barotropy exponent) must be > 0; got "
+            << param_name << "[3] (n, barotropy exponent) must be > 0; got "
             << en << "." << std::endl;
         KRATOS_ERROR_IF_NOT(ed0 > 0.0 && ec0 > 0.0 && ei0 > 0.0)
-            << "MATERIAL_PARAMETERS[4..6] (e_d0, e_c0, e_i0) must all be > 0; got "
+            << param_name << "[4..6] (e_d0, e_c0, e_i0) must all be > 0; got "
             << ed0 << ", " << ec0 << ", " << ei0 << "." << std::endl;
         KRATOS_ERROR_IF_NOT(ec0 > ed0)
-            << "MATERIAL_PARAMETERS: void-ratio ordering violated, must have "
+            << param_name << ": void-ratio ordering violated, must have "
                "e_d0 < e_c0 (densest < critical); got e_d0 = " << ed0
             << ", e_c0 = " << ec0 << ". (e_c0 - e_d0) appears in a denominator "
                "of the Fortran factor-fb formula." << std::endl;
         KRATOS_ERROR_IF_NOT(ei0 >= ed0)
-            << "MATERIAL_PARAMETERS: void-ratio ordering violated, must have "
+            << param_name << ": void-ratio ordering violated, must have "
                "e_d0 <= e_i0 (densest <= initial-loosest); got e_d0 = " << ed0
             << ", e_i0 = " << ei0 << "." << std::endl;
         KRATOS_ERROR_IF_NOT(alpha > 0.0)
-            << "MATERIAL_PARAMETERS[7] (alpha, pyknotropy exponent) must be > 0; got "
+            << param_name << "[7] (alpha, pyknotropy exponent) must be > 0; got "
             << alpha << "." << std::endl;
 
         const double pi = 4.0 * std::atan(1.0);
@@ -262,7 +285,7 @@ int SandHypoplasticFortranDllLaw::Check(
         // (small enough that we are below pi). Defend against numerically
         // small phi just in case.
         KRATOS_ERROR_IF(sin_phi <= 0.0)
-            << "MATERIAL_PARAMETERS[0] (phi) yields sin(phi) <= 0 after "
+            << param_name << "[0] (phi) yields sin(phi) <= 0 after "
                "deg->rad conversion (phi = " << phi_deg << " deg, phi_rad = "
             << phi_rad << "). The factor-fb formula divides by sin(phi)." << std::endl;
 
@@ -273,7 +296,7 @@ int SandHypoplasticFortranDllLaw::Check(
         const double temp1 = 3.0 + a * a - a * sqrt3 * std::pow(ratio, alpha);
 
         KRATOS_ERROR_IF(temp1 < 0.0)
-            << "MATERIAL_PARAMETERS produce a non-physical Fortran factor-fb: "
+            << param_name << " produces a non-physical Fortran factor-fb: "
                "temp1 = 3 + a^2 - a*sqrt(3)*((e_i0 - e_d0)/(e_c0 - e_d0))^alpha = "
             << temp1 << " < 0. Diagnostics: phi = " << phi_deg
             << " deg, a = " << a << ", (e_i0 - e_d0)/(e_c0 - e_d0) = " << ratio
@@ -541,7 +564,7 @@ void SandHypoplasticFortranDllLaw::CalculateMaterialResponseKirchhoff(Parameters
 
     Flags& r_options = rValues.GetOptions();
     const Properties& r_props = rValues.GetMaterialProperties();
-    const Vector& r_params = r_props[MATERIAL_PARAMETERS];
+    const Vector& r_params = GetSandHypoplasticParameters(r_props);
 
     // ---- 1. Pull F_{n+1} and recover F_n from inverse cache ---------------
     const Matrix& F_new = rValues.GetDeformationGradientF();
