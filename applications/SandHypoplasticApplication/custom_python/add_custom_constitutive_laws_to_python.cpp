@@ -7,6 +7,7 @@
 // Project includes
 #include "custom_python/add_custom_constitutive_laws_to_python.h"
 #include "custom_constitutive/path_a_fortran_dll/sand_hypoplastic_fortran_dll_law.h"
+#include "custom_constitutive/path_b_cpp_port/sand_hypoplastic_cpp_law.h"
 
 namespace Kratos
 {
@@ -17,6 +18,9 @@ namespace py = pybind11;
 void AddCustomConstitutiveLawsToPython(pybind11::module& m)
 {
     py::class_<SandHypoplasticFortranDllLaw, SandHypoplasticFortranDllLaw::Pointer, ConstitutiveLaw>(m, "SandHypoplasticFortranDllLaw")
+        .def(py::init<>());
+
+    py::class_<SandHypoplasticCppLaw, SandHypoplasticCppLaw::Pointer, ConstitutiveLaw>(m, "SandHypoplasticCppLaw")
         .def(py::init<>());
 }
 

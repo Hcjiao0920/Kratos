@@ -11,6 +11,7 @@
 #include "includes/kratos_application.h"
 #include "sand_hypoplastic_application_variables.h"
 #include "custom_constitutive/path_a_fortran_dll/sand_hypoplastic_fortran_dll_law.h"
+#include "custom_constitutive/path_b_cpp_port/sand_hypoplastic_cpp_law.h"
 
 namespace Kratos
 {
@@ -37,6 +38,7 @@ public:
 
 private:
     const SandHypoplasticFortranDllLaw mSandHypoplasticFortranDllLaw;
+    const SandHypoplasticCppLaw        mSandHypoplasticCppLaw;
 };
 
 } // namespace Kratos

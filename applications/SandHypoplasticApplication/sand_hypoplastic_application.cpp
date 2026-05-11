@@ -23,6 +23,7 @@ void KratosSandHypoplasticApplication::Register()
     KRATOS_REGISTER_VARIABLE(SAND_HYPOPLASTIC_PROPS_16)
 
     KRATOS_REGISTER_CONSTITUTIVE_LAW("SandHypoplasticFortranDllLaw", mSandHypoplasticFortranDllLaw)
+    KRATOS_REGISTER_CONSTITUTIVE_LAW("SandHypoplasticCppLaw",        mSandHypoplasticCppLaw)
 }
 
 } // namespace Kratos

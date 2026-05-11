@@ -15,6 +15,8 @@ set(KRATOS_SAND_HYPOPLASTIC_APPLICATION_CORE
     ${CMAKE_CURRENT_SOURCE_DIR}/sand_hypoplastic_application.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sand_hypoplastic_application_variables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/custom_constitutive/path_a_fortran_dll/sand_hypoplastic_fortran_dll_law.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/custom_constitutive/path_b_cpp_port/sand_hypoplastic_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/custom_constitutive/path_b_cpp_port/sand_hypoplastic_cpp_law.cpp
 )
 
 set(KRATOS_SAND_HYPOPLASTIC_APPLICATION_PYTHON_INTERFACE
