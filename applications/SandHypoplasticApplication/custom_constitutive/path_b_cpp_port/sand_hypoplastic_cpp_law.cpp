@@ -71,7 +71,8 @@ SandHypoplasticCppLaw::SandHypoplasticCppLaw(const SandHypoplasticCppLaw& rOther
       mDtsubPersistent(rOther.mDtsubPersistent),
       mInitialized(rOther.mInitialized),
       mFirstCallStateLoaded(rOther.mFirstCallStateLoaded),
-      mF0_3x3(rOther.mF0_3x3)
+      mF0_3x3(rOther.mF0_3x3),
+      mEpsPrevExplicitKratos(rOther.mEpsPrevExplicitKratos)
 {
 }
 
@@ -220,6 +221,7 @@ void SandHypoplasticCppLaw::InitializeMaterial(const Properties& rMaterialProper
         mPore = 0.0;
         mDtsubPersistent = 0.0;
         mF0_3x3 = IdentityMatrix(3, 3);
+        mEpsPrevExplicitKratos.fill(0.0);
         mFirstCallStateLoaded = false;
         mInitialized = true;
     }
@@ -261,6 +263,7 @@ void SandHypoplasticCppLaw::ResetMaterial(const Properties& rMaterialProperties,
     mPore = 0.0;
     mDtsubPersistent = 0.0;
     mF0_3x3 = IdentityMatrix(3, 3);
+    mEpsPrevExplicitKratos.fill(0.0);
     mFirstCallStateLoaded = false;
     mInitialized = true;
 }
@@ -311,13 +314,11 @@ void SandHypoplasticCppLaw::CalculateMaterialResponseCauchy(Parameters& rValues)
     const bool compute_stress  = options.Is(ConstitutiveLaw::COMPUTE_STRESS);
     const bool compute_tangent = options.Is(ConstitutiveLaw::COMPUTE_CONSTITUTIVE_TENSOR);
 
-    // F11 fix: compute total Almansi strain from F here. MPM's
-    // CalculateKinematics fills only F/B/DN_DX -- `rVariables.StrainVector`
-    // is uninitialized at law-call time on the implicit path. We compute
-    // Almansi from `rValues.GetDeformationGradientF()` (= FT in MPM terms,
-    // the total deformation gradient at end of step) and write it back so
-    // MPM's FinalizeStepVariables (`mpm_updated_lagrangian.cpp:927`) can
-    // persist it into `mMP.almansi_strain_vector`.
+    // F11 fix: read F here for both paths -- the implicit branch needs it
+    // for polar decomposition + Almansi-from-F write-back; the explicit
+    // branch only uses it as a defense-in-depth kinematic-gate / restart
+    // hand-off (round-3 explicit kinematics come from rValues.StrainVector,
+    // not F -- see PROJ-TD-2 closure in TECH_DEBT.md).
     const Matrix& F_total = rValues.GetDeformationGradientF();
     KRATOS_ERROR_IF(F_total.size1() != 3 || F_total.size2() != 3)
         << "DeformationGradientF must be 3x3; got " << F_total.size1() << "x" << F_total.size2();
@@ -330,14 +331,13 @@ void SandHypoplasticCppLaw::CalculateMaterialResponseCauchy(Parameters& rValues)
     // and the polar decomp can return an improper rotation (det R = -1) for
     // orientation-reversing F (C = F^T F is SPD regardless of sign(det F),
     // so the eigenvalue-positivity check inside PolarDecompFAndLogU does
-    // NOT block det(F) < 0).
+    // NOT block det(F) < 0). On the explicit path F is typically I or
+    // I+symmetric_strain_increment (mpm_explicit_utilities.cpp:346-347);
+    // keeping the gate is cheap and rejects upstream contract breakage.
     const double det_F_total = MathUtils<double>::Det(F_total);
     KRATOS_ERROR_IF_NOT(std::isfinite(det_F_total) && det_F_total > 0.0)
         << "SandHypoplasticCppLaw: det(F_total) = " << det_F_total
         << " is non-finite or non-positive (singular / orientation-reversing kinematics).";
-
-    std::array<double, kVoigt> strain_now_kratos{};
-    CalculateAlmansiFromF(F_total, strain_now_kratos);
 
     // ----- First-call state load (one-shot) ----------------------------
     // Order matters. Steps mirror Fortran umat .for:165-209.
@@ -371,75 +371,142 @@ void SandHypoplasticCppLaw::CalculateMaterialResponseCauchy(Parameters& rValues)
         mFirstCallStateLoaded = true;
     }
 
-    // ----- Corotational kinematics (Codex 2026-05-11 F13 fix) ----------
-    // F_rel = F_total · F0^-1 = relative deformation gradient over this step.
-    // Polar decomp F_rel = R · U gives:
-    //   - R: rotation increment (used to pre-rotate stored σ_n and δ_n into
-    //     the end-of-step spatial frame, Hughes-Winget pre-rotation).
-    //   - log(U): Hencky strain of the relative stretch -- the corotational
-    //     strain increment fed to the kernel.
-    // Kratos MPM does NO host-side stress rotation (mpm_updated_lagrangian
-    // .cpp:568,926); the contract puts objectivity entirely inside the law.
-    Matrix F0_inv(3, 3);
-    double det_F0 = 0.0;
-    MathUtils<double>::InvertMatrix(mF0_3x3, F0_inv, det_F0);
-    KRATOS_ERROR_IF_NOT(std::isfinite(det_F0) && det_F0 > 0.0)
-        << "SandHypoplasticCppLaw: persisted mF0_3x3 has det = " << det_F0
-        << " (non-finite or non-positive). Internal invariant violation -- previous "
-        << "step committed a corrupt F_total.";
-    Matrix F_rel(3, 3);
-    noalias(F_rel) = prod(F_total, F0_inv);
+    // ----- Kernel-input pack -- branches on IS_EXPLICIT ----------------
+    //
+    // IMPLICIT path (Codex 2026-05-11 F13): F_rel = F_total · F0^-1, polar
+    // decomp F_rel = R · U. R pre-rotates stored σ_n and δ_n into the
+    // end-of-step spatial frame (Hughes-Winget), log(V) is the
+    // corotational strain increment. Kratos MPM does NO host-side stress
+    // rotation on the implicit path (mpm_updated_lagrangian.cpp:568,926);
+    // objectivity is owned by the law. Almansi-from-F is written back to
+    // rValues.StrainVector for MPM's `mMP.almansi_strain_vector`
+    // post-processing persistence (.cpp:927).
+    //
+    // EXPLICIT path (round 3, 2026-05-12, PROJ-TD-2 fix): the element's
+    // CalculateExplicitKinematics populates rValues.StrainVector with the
+    // Jaumann-corrected cumulative Almansi
+    // (mpm_explicit_utilities.cpp:314-322 -> .cpp:565-569) -- THAT is the
+    // only strain signal carrying rotation in explicit MPM, because the
+    // F handed in via SetDeformationGradientF (.cpp:255) is either I or
+    // I+symmetric_strain_increment (.cpp:346-347) and carries no spin.
+    // The kernel-driving Δε is therefore the difference between the
+    // current rValues.StrainVector and the persisted mEpsPrevExplicitKratos
+    // -- NO polar decomposition, NO R-rotation of σ_n / δ_n (the Jaumann
+    // history already accounts for spin in the strain stream). The strain
+    // write-back is skipped so the next step's CalculateExplicitKinematics
+    // can read the value it stored, apply its own Jaumann correction, and
+    // produce the next strain consistently.
 
-    // F14 guard #2: det(F_rel) > 0 (orientation-preserving relative step).
-    // Note that C = F_rel^T F_rel is SPD for any non-singular F_rel, so
-    // PolarDecompFAndLogU alone cannot reject this case -- it would return
-    // an improper rotation (det R = -1).
-    const double det_F_rel = MathUtils<double>::Det(F_rel);
-    KRATOS_ERROR_IF_NOT(std::isfinite(det_F_rel) && det_F_rel > 0.0)
-        << "SandHypoplasticCppLaw: det(F_rel) = " << det_F_rel
-        << " is non-finite or non-positive (singular / orientation-reversing relative step).";
-
-    Matrix R(3, 3);
+    std::array<double, kVoigt> sig_n_abq{};
+    std::array<double, SandHypoCpp::kStateDim> q_n{};
     std::array<double, kVoigt> deps_abq{};
-    PolarDecompFAndLogU(F_rel, R, deps_abq);
 
-    // Pre-rotate stored stress and intergranular strain by R.
-    std::array<double, kVoigt> sig_n_abq_rotated{};
-    RotateStressVoigtAbq(mSigEffAbq, R, sig_n_abq_rotated);
+    if (!is_explicit) {
+        // ----- IMPLICIT branch (Round 1+2 logic, unchanged) ------------
+        std::array<double, kVoigt> strain_now_kratos{};
+        CalculateAlmansiFromF(F_total, strain_now_kratos);
 
-    std::array<double, kVoigt> delta_n_abq{};
-    for (std::size_t i = 0; i < kVoigt; ++i) delta_n_abq[i] = mStateAbq[i];
-    std::array<double, kVoigt> delta_n_abq_rotated{};
-    RotateStrainVoigtAbq(delta_n_abq, R, delta_n_abq_rotated);
+        Matrix F0_inv(3, 3);
+        double det_F0 = 0.0;
+        MathUtils<double>::InvertMatrix(mF0_3x3, F0_inv, det_F0);
+        KRATOS_ERROR_IF_NOT(std::isfinite(det_F0) && det_F0 > 0.0)
+            << "SandHypoplasticCppLaw: persisted mF0_3x3 has det = " << det_F0
+            << " (non-finite or non-positive). Internal invariant violation -- previous "
+            << "step committed a corrupt F_total.";
+        Matrix F_rel(3, 3);
+        noalias(F_rel) = prod(F_total, F0_inv);
 
-    std::array<double, SandHypoCpp::kStateDim> q_n_rotated{};
-    for (std::size_t i = 0; i < kVoigt; ++i) q_n_rotated[i] = delta_n_abq_rotated[i];
-    q_n_rotated[6] = mStateAbq[6]; // void ratio scalar -- no rotation
+        // F14 guard #2: det(F_rel) > 0 (orientation-preserving relative step).
+        // Note that C = F_rel^T F_rel is SPD for any non-singular F_rel, so
+        // PolarDecompFAndLogU alone cannot reject this case -- it would return
+        // an improper rotation (det R = -1).
+        const double det_F_rel = MathUtils<double>::Det(F_rel);
+        KRATOS_ERROR_IF_NOT(std::isfinite(det_F_rel) && det_F_rel > 0.0)
+            << "SandHypoplasticCppLaw: det(F_rel) = " << det_F_rel
+            << " is non-finite or non-positive (singular / orientation-reversing relative step).";
 
-    // Write Almansi back into the element's strain buffer for MPM post-
-    // processing persistence (.cpp:927 -> mMP.almansi_strain_vector).
-    //
-    // IMPLICIT path: element does NOT populate `rVariables.StrainVector` --
-    // its CalculateKinematics only fills F/B/DN_DX. Bridge owns the value
-    // (Codex F11). Write F-based Almansi here.
-    //
-    // EXPLICIT path: element DOES populate `rVariables.StrainVector` via
-    // CalculateExplicitKinematics with a Jaumann-rate spin correction
-    // baked in (mpm_explicit_utilities.cpp:314-322 -> .cpp:565-569).
-    // Overwriting it would replace the Jaumann history that the NEXT step's
-    // CalculateExplicitKinematics assumes is consistent. Skip the write-back
-    // in explicit -- the kernel-driving Δε above is `log(V)` from polar
-    // decomp, computed from F directly and not affected by what sits in
-    // `rVariables.StrainVector`.
-    if (!is_explicit && rValues.IsSetStrainVector()) {
-        Vector& strain_out_kratos = rValues.GetStrainVector();
-        if (strain_out_kratos.size() != kVoigt) strain_out_kratos.resize(kVoigt, false);
-        for (std::size_t i = 0; i < kVoigt; ++i) strain_out_kratos[i] = strain_now_kratos[i];
+        Matrix R(3, 3);
+        PolarDecompFAndLogU(F_rel, R, deps_abq);
+
+        // Pre-rotate stored stress and intergranular strain by R.
+        RotateStressVoigtAbq(mSigEffAbq, R, sig_n_abq);
+
+        std::array<double, kVoigt> delta_n_abq{};
+        for (std::size_t i = 0; i < kVoigt; ++i) delta_n_abq[i] = mStateAbq[i];
+        std::array<double, kVoigt> delta_n_abq_rotated{};
+        RotateStrainVoigtAbq(delta_n_abq, R, delta_n_abq_rotated);
+        for (std::size_t i = 0; i < kVoigt; ++i) q_n[i] = delta_n_abq_rotated[i];
+        q_n[6] = mStateAbq[6]; // void ratio scalar -- no rotation
+
+        // Write Almansi back so MPM's FinalizeStepVariables persists it into
+        // `mMP.almansi_strain_vector` for post-processing.
+        if (rValues.IsSetStrainVector()) {
+            Vector& strain_out_kratos = rValues.GetStrainVector();
+            if (strain_out_kratos.size() != kVoigt) strain_out_kratos.resize(kVoigt, false);
+            for (std::size_t i = 0; i < kVoigt; ++i) strain_out_kratos[i] = strain_now_kratos[i];
+        }
+    } else {
+        // ----- EXPLICIT branch (Round 3, 2026-05-12, PROJ-TD-2 fix) ----
+        //
+        // Consume the element-populated Jaumann-corrected cumulative
+        // Almansi from rValues.GetStrainVector(). Differentiate against
+        // mEpsPrevExplicitKratos to get the kernel-driving Δε. No
+        // polar decomp, no R-rotation of σ_n/δ_n.
+        KRATOS_ERROR_IF_NOT(rValues.IsSetStrainVector())
+            << "SandHypoplasticCppLaw: explicit branch requires the element to "
+               "set the StrainVector before calling Calculate. MPM normally "
+               "populates rValues.GetStrainVector() from "
+               "mMP.almansi_strain_vector via SetStrainVector. If you are "
+               "calling Calculate manually, attach a Vector(6) via "
+               "Parameters::SetStrainVector first.";
+        const Vector& strain_now_vec = rValues.GetStrainVector();
+        KRATOS_ERROR_IF(strain_now_vec.size() != kVoigt)
+            << "SandHypoplasticCppLaw: explicit branch expects StrainVector of "
+               "size 6 (Kratos Voigt); got " << strain_now_vec.size() << ".";
+
+        std::array<double, kVoigt> strain_now_kratos{};
+        for (std::size_t i = 0; i < kVoigt; ++i) {
+            const double v = strain_now_vec[i];
+            KRATOS_ERROR_IF_NOT(std::isfinite(v) && std::abs(v) <= 1.0e30)
+                << "SandHypoplasticCppLaw: explicit StrainVector[" << i << "] = "
+                << v << " is non-finite or > 1e30. CalculateExplicitKinematics "
+                   "produced a corrupt strain.";
+            strain_now_kratos[i] = v;
+        }
+
+        // Δε in Kratos Voigt order (engineering shear). Off-diagonals are
+        // doubled the same way on both terms so the difference preserves
+        // engineering-shear convention -- the kernel and the Fortran umat
+        // both expect engineering shear (kernel norm_D guard mirrors
+        // .for:201-209 `umatisnan_h(norm_D)`).
+        std::array<double, kVoigt> deps_kratos{};
+        for (std::size_t i = 0; i < kVoigt; ++i) {
+            deps_kratos[i] = strain_now_kratos[i] - mEpsPrevExplicitKratos[i];
+            KRATOS_ERROR_IF_NOT(std::isfinite(deps_kratos[i])
+                                && std::abs(deps_kratos[i]) <= 1.0e30)
+                << "SandHypoplasticCppLaw: explicit deps_kratos[" << i << "] = "
+                << deps_kratos[i] << " is non-finite or > 1e30. Likely a "
+                   "discontinuity in the Jaumann strain stream "
+                   "(mEpsPrevExplicitKratos out of sync after restart, or "
+                   "element strain history reset mid-simulation).";
+        }
+
+        // Slot 4<->5 swap: Kratos -> Abaqus (the Voigt convention the kernel
+        // expects; same as the implicit path's log(V) output).
+        for (std::size_t i = 0; i < kVoigt; ++i) deps_abq[i] = deps_kratos[SwapIdx(i)];
+
+        // No rotation of σ_n / δ_n -- the Jaumann history baked into Δε
+        // already accounts for spin.
+        sig_n_abq = mSigEffAbq;
+        for (std::size_t i = 0; i < kVoigt; ++i) q_n[i] = mStateAbq[i];
+        q_n[6] = mStateAbq[6];
+
+        // Do NOT write back to rValues.StrainVector in explicit. The next
+        // step's CalculateExplicitKinematics READS this slot to apply the
+        // Jaumann spin correction to (mpm_explicit_utilities.cpp:319-322);
+        // overwriting it would corrupt the strain stream.
     }
 
-    // ----- Pack kernel input. q_n_rotated = R-rotated del + void; sig_n_rotated = effective.
-    std::array<double, kVoigt> sig_n_abq = sig_n_abq_rotated;
-    std::array<double, SandHypoCpp::kStateDim> q_n = q_n_rotated;
     const double dtsub_in = mDtsubPersistent; // first call: 0; integrate_step normalizes -> dtime.
 
     // ----- Call kernel -------------------------------------------------
@@ -548,16 +615,34 @@ void SandHypoplasticCppLaw::CalculateMaterialResponseCauchy(Parameters& rValues)
     // (mpm_updated_lagrangian.cpp:882-883 errors out FinalizeSolutionStep
     // for explicit). So the bridge MUST commit internal state here, at the
     // end of Calculate, otherwise mSigEffAbq / mStateAbq / mPore /
-    // mDtsubPersistent / mF0_3x3 stay at initial values forever and the
-    // bridge is effectively stateless across explicit steps. The element's
-    // `FinalizeStepVariables` (line 1501, immediately after Calculate
-    // returns) handles `mMP.cauchy_stress_vector` writeback separately.
+    // mDtsubPersistent / mEpsPrevExplicitKratos / mF0_3x3 stay at initial
+    // values forever and the bridge is effectively stateless across
+    // explicit steps. The element's `FinalizeStepVariables` (line 1501,
+    // immediately after Calculate returns) handles `mMP.cauchy_stress_vector`
+    // writeback separately.
+    //
+    // mEpsPrevExplicitKratos commits to the current step's Jaumann-corrected
+    // strain so the next step's Δε is well-formed.
+    //
+    // mF0_3x3 is committed to F_total even though the explicit branch
+    // does not use it for kinematics -- a serialized state round-tripped
+    // from explicit to implicit (restart) would otherwise see an
+    // out-of-date F0 on the first implicit step. Cost is one Matrix copy
+    // per step; the alternative (leaving F0 stale) is a silent restart
+    // hazard.
     if (is_explicit) {
         std::memcpy(mSigEffAbq.data(), step.sig, sizeof(double) * kVoigt);
         for (std::size_t i = 0; i < SandHypoCpp::kStateDim; ++i) mStateAbq[i] = step.q[i];
         mPore = pore_next;
         mDtsubPersistent = step.dtsub_next;
         mF0_3x3 = F_total;
+
+        // Round 3: persist the begin-of-(next-)step baseline for the
+        // explicit Δε differencing scheme. Re-read from rValues since the
+        // local copy `strain_now_kratos` lives inside the !is_explicit
+        // scope only.
+        const Vector& strain_now_vec = rValues.GetStrainVector();
+        for (std::size_t i = 0; i < kVoigt; ++i) mEpsPrevExplicitKratos[i] = strain_now_vec[i];
     }
 }
 

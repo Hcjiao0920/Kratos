@@ -43,13 +43,16 @@ public:
     // MPMUpdatedLagrangian::Check (mpm_updated_lagrangian.cpp:1728-1743):
     // implicit runs require Deformation_Gradient; explicit runs accept
     // EITHER Deformation_Gradient OR Velocity_Gradient. The bridge consumes
-    // F directly (via polar decomposition + log(V)) in BOTH paths -- the
-    // element-supplied `rVariables.StrainVector` is bypassed entirely for
-    // the kernel-driving Δε. Round 2 (2026-05-11) added explicit MPM
-    // support: Check no longer rejects `IS_EXPLICIT`, and
-    // `CalculateMaterialResponseCauchy` commits internal state at the end
-    // of the call when explicit (because the element never calls Finalize
-    // in explicit -- .cpp:882-883).
+    // F directly (via polar decomposition + log(V)) on the IMPLICIT path;
+    // on the EXPLICIT path it consumes `rValues.GetStrainVector()` (the
+    // Jaumann-corrected cumulative Almansi populated by
+    // `MPMExplicitUtilities::CalculateExplicitKinematics`,
+    // `mpm_explicit_utilities.cpp:314-322`) and differentiates against
+    // the persisted previous-step strain `mEpsPrevExplicitKratos` to get
+    // the kernel-driving Δε. Round 2 (2026-05-11) accepted explicit setups
+    // at Check; round 3 (2026-05-12) made the explicit branch actually
+    // honor the Kratos MPM explicit kinematics contract -- F-based
+    // polar-decomp on explicit was silent-freezing rotation per PROJ-TD-2.
     StrainMeasure GetStrainMeasure() override { return StrainMeasure_Deformation_Gradient; }
     StressMeasure GetStressMeasure() override { return StressMeasure_Cauchy; }
 
@@ -102,16 +105,39 @@ private:
 
     // Hughes-Winget corotational bookkeeping (Codex 2026-05-11 F13 fix).
     // mF0_3x3 is the total deformation gradient committed at the END of
-    // the previous step. At first call it must equal Identity(3,3). Each
-    // step computes the relative deformation gradient
-    // `F_rel = F_total_now * F0_3x3^-1`, polar-decomposes
+    // the previous step. At first call it must equal Identity(3,3). On
+    // the IMPLICIT path each step computes the relative deformation
+    // gradient `F_rel = F_total_now * F0_3x3^-1`, polar-decomposes
     // `F_rel = R * U`, uses `R` to rotate the stored stress and
     // intergranular strain into the current/end-of-step spatial frame,
     // and uses `log(U)` as the corotational strain increment Δε fed to
     // the kernel. Kratos MPM does NO host-side stress rotation -- the
     // contract puts objectivity inside the law (verified against
     // mpm_updated_lagrangian.cpp:568,926: stress passed in/out unchanged).
+    //
+    // On the EXPLICIT path (round 3) mF0_3x3 is NOT used for kinematics
+    // -- Δε comes from differencing the Jaumann-corrected strain in
+    // rValues.GetStrainVector() against mEpsPrevExplicitKratos. mF0_3x3
+    // is still updated on every explicit commit (to F_total) so that a
+    // restart switching from explicit to implicit on the same material
+    // point has a meaningful F0 for the first implicit step.
     Matrix mF0_3x3;
+
+    // Round 3 (2026-05-12) -- begin-of-step strain in Kratos Voigt order
+    // for the EXPLICIT branch. The explicit kernel-driving increment is
+    // `Δε = rValues.GetStrainVector() - mEpsPrevExplicitKratos`. The
+    // element's CalculateExplicitKinematics writes the Jaumann-corrected
+    // cumulative Almansi to rValues.StrainVector each step, so this
+    // difference carries the spin-corrected strain rate -- the only
+    // strain-history signal that survives the explicit kinematics path
+    // (see PROJ-TD-2 in TECH_DEBT.md). Implicit branch does not touch
+    // this member.
+    //
+    // Default-zero. Cleared in the InitializeMaterial first-init branch
+    // and in ResetMaterial alongside the other persistent history
+    // members. Serialized for restart symmetry with the existing
+    // PROJ-TD F5 fix.
+    std::array<double, 6> mEpsPrevExplicitKratos{};
 
     // Kratos<->Abaqus Voigt slot 4<->5 swap helpers. Vectors swap idx 4 and
     // 5; the 6x6 tangent swaps both rows 4<->5 and columns 4<->5.
@@ -216,6 +242,7 @@ private:
         rSerializer.save("mInitialized",          mInitialized);
         rSerializer.save("mFirstCallStateLoaded", mFirstCallStateLoaded);
         rSerializer.save("mF0_3x3",               mF0_3x3);
+        rSerializer.save("mEpsPrevExplicitKratos", mEpsPrevExplicitKratos);
     }
     void load(Serializer& rSerializer) override
     {
@@ -227,6 +254,7 @@ private:
         rSerializer.load("mInitialized",          mInitialized);
         rSerializer.load("mFirstCallStateLoaded", mFirstCallStateLoaded);
         rSerializer.load("mF0_3x3",               mF0_3x3);
+        rSerializer.load("mEpsPrevExplicitKratos", mEpsPrevExplicitKratos);
     }
 };
 
