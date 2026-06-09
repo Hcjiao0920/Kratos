@@ -7,7 +7,13 @@
 #include "sand_hypoplastic_cpp_law.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <mutex>
+#include <sstream>
+#include <string>
 
 #include "includes/checks.h"
 #include "includes/mat_variables.h"
@@ -52,6 +58,135 @@ inline std::size_t SwapIdx(std::size_t i)
     if (i == 4) return 5;
     if (i == 5) return 4;
     return i;
+}
+
+// ====================================================================
+// Per-MP debug-dump (post-round-4 diagnostic, 2026-05-12)
+// ====================================================================
+//
+// When environment variables `PATH_B_DEBUG_DUMP_STEP_MIN` and
+// `PATH_B_DEBUG_DUMP_STEP_MAX` are both set (inclusive range, integer
+// step indices), every Calculate call within that step range writes a
+// JSON-lines record to `PATH_B_DEBUG_DUMP_FILE` (default
+// `path_b_debug_dump.jsonl` in the current working directory).
+//
+// Designed for the use case "Kratos MPM crashes natively at step N
+// AFTER the bridge returns; what changed between step N-1 (success)
+// and step N (death) in the per-MP kernel input/output?" — set
+// MIN=N-1 MAX=N, run the failing sim, then diff the resulting JSONL.
+//
+// Zero overhead when the env vars are unset (single static-bool
+// check). Thread-safe via a global mutex (cheap because the dump
+// path is only hot during debug sessions). Best run with
+// OMP_NUM_THREADS=1 to keep per-MP call ordering deterministic across
+// repeated runs.
+//
+// The record schema is documented in
+// memory/reference_kratos_mpm_3d_singularity.md.
+
+struct DebugDumper
+{
+    bool enabled = false;
+    int step_min = -1;
+    int step_max = -1;
+    std::ofstream stream;
+    std::mutex mutex;
+    int current_step = -1;
+    int call_count_in_step = 0;
+
+    static DebugDumper& Instance()
+    {
+        static DebugDumper inst;
+        return inst;
+    }
+
+    void EnsureInit()
+    {
+        std::lock_guard<std::mutex> g(mutex);
+        if (enabled || step_min >= 0) return; // already initialized
+        const char* v_min = std::getenv("PATH_B_DEBUG_DUMP_STEP_MIN");
+        const char* v_max = std::getenv("PATH_B_DEBUG_DUMP_STEP_MAX");
+        std::cerr << "[PATH_B_DEBUG] EnsureInit: PATH_B_DEBUG_DUMP_STEP_MIN="
+                  << (v_min ? v_min : "(unset)")
+                  << " PATH_B_DEBUG_DUMP_STEP_MAX="
+                  << (v_max ? v_max : "(unset)") << std::endl;
+        if (!v_min || !v_max || !*v_min || !*v_max) {
+            step_min = -2; // sentinel "checked, not requested"
+            return;
+        }
+        step_min = std::atoi(v_min);
+        step_max = std::atoi(v_max);
+        if (step_min < 0 || step_max < step_min) {
+            std::cerr << "[PATH_B_DEBUG] bad range: " << step_min << "-" << step_max << std::endl;
+            step_min = -2;
+            return;
+        }
+        const char* v_file = std::getenv("PATH_B_DEBUG_DUMP_FILE");
+        std::string path = (v_file && *v_file) ? v_file : "path_b_debug_dump.jsonl";
+        stream.open(path, std::ios::out | std::ios::trunc);
+        if (!stream.is_open()) {
+            std::cerr << "[PATH_B_DEBUG] FAILED to open dump file: " << path << std::endl;
+            step_min = -2;
+            return;
+        }
+        stream << std::setprecision(15);
+        enabled = true;
+        std::cerr << "[PATH_B_DEBUG] init OK: dumping steps " << step_min
+                  << ".." << step_max << " -> " << path << std::endl;
+    }
+
+    bool ShouldDumpForStep(int step)
+    {
+        EnsureInit();
+        return enabled && step >= step_min && step <= step_max;
+    }
+
+    // Bump per-step call counter. Caller must hold the dumper mutex.
+    int NextCallIdLocked(int step)
+    {
+        if (step != current_step) {
+            current_step = step;
+            call_count_in_step = 0;
+        }
+        return call_count_in_step++;
+    }
+};
+
+// Helpers to format arrays / matrices as JSON arrays.
+inline void DumpArrayJson(std::ostream& s, const double* p, std::size_t n)
+{
+    s << "[";
+    for (std::size_t i = 0; i < n; ++i) {
+        if (i) s << ",";
+        s << p[i];
+    }
+    s << "]";
+}
+inline void DumpVoigtJson(std::ostream& s, const std::array<double, 6>& v)
+{
+    DumpArrayJson(s, v.data(), 6);
+}
+inline void DumpMatrix3x3Json(std::ostream& s, const Matrix& M)
+{
+    s << "[";
+    for (std::size_t i = 0; i < 3; ++i) {
+        for (std::size_t j = 0; j < 3; ++j) {
+            if (i || j) s << ",";
+            s << M(i, j);
+        }
+    }
+    s << "]";
+}
+inline void DumpMatrix6x6Json(std::ostream& s, const Matrix& M)
+{
+    s << "[";
+    for (std::size_t i = 0; i < 6; ++i) {
+        for (std::size_t j = 0; j < 6; ++j) {
+            if (i || j) s << ",";
+            s << M(i, j);
+        }
+    }
+    s << "]";
 }
 
 } // anonymous namespace
@@ -601,6 +736,66 @@ void SandHypoplasticCppLaw::CalculateMaterialResponseCauchy(Parameters& rValues)
                 D_abq[i][j] = step.D[i][j];
         SwapTangentAbqToKratos(D_abq, tangent_out_kratos);
         AddBulkWNormalBlock(tangent_out_kratos, bulk_w);
+    }
+
+    // ----- Per-MP debug dump (post-round-4 diagnostic) ----------------
+    // No-op when env vars PATH_B_DEBUG_DUMP_STEP_MIN / _MAX are unset.
+    // When set, writes one JSON line per Calculate call within the
+    // configured step range to PATH_B_DEBUG_DUMP_FILE. Captures the
+    // bridge-side input and output as they would reach Kratos, so the
+    // user can diff successful-step records against the step where
+    // Kratos crashes after the bridge returns.
+    {
+        const int step_index = (process_info.Has(STEP)) ? process_info.GetValue(STEP) : -1;
+        auto& dumper = DebugDumper::Instance();
+        if (dumper.ShouldDumpForStep(step_index)) {
+            std::lock_guard<std::mutex> g(dumper.mutex);
+            const int call_id = dumper.NextCallIdLocked(step_index);
+            std::ostringstream out;
+            out << std::setprecision(15);
+            out << "{"
+                << "\"step\":" << step_index
+                << ",\"call\":" << call_id
+                << ",\"dtime\":" << dtime
+                << ",\"is_explicit\":" << (is_explicit ? "true" : "false")
+                << ",\"first_call_state_loaded\":" << (mFirstCallStateLoaded ? "true" : "false")
+                << ",\"det_F\":" << det_F_total
+                << ",\"F\":";
+            DumpMatrix3x3Json(out, F_total);
+            out << ",\"deps_abq\":";
+            DumpVoigtJson(out, deps_abq);
+            out << ",\"sig_n_abq_in\":";
+            DumpVoigtJson(out, sig_n_abq);
+            out << ",\"q_n_in\":";
+            DumpArrayJson(out, q_n.data(), SandHypoCpp::kStateDim);
+            out << ",\"pore_in\":" << mPore
+                << ",\"dtsub_in\":" << dtsub_in
+                << ",\"failure_class\":" << static_cast<int>(step.failure_class)
+                << ",\"error\":" << step.error
+                << ",\"nfev\":" << step.nfev
+                << ",\"used_elastic\":" << (step.used_elastic ? "true" : "false")
+                << ",\"dtsub_next\":" << step.dtsub_next
+                << ",\"pore_next\":" << pore_next
+                << ",\"sig_eff_out\":";
+            DumpArrayJson(out, step.sig, 6);
+            out << ",\"q_out\":";
+            DumpArrayJson(out, step.q, SandHypoCpp::kStateDim);
+            out << ",\"sig_total_next_abq\":";
+            DumpVoigtJson(out, sig_total_next_abq);
+            // D in Abaqus order (post-swap to Kratos happens only in
+            // the Kratos output buffer above; the raw kernel D is more
+            // useful for diff analysis since it's the law's intrinsic
+            // output before any Voigt-swap or bulk_w correction).
+            out << ",\"D_abq\":[";
+            for (std::size_t i = 0; i < 6; ++i)
+                for (std::size_t j = 0; j < 6; ++j) {
+                    if (i || j) out << ",";
+                    out << step.D[i][j];
+                }
+            out << "]}";
+            dumper.stream << out.str() << "\n";
+            dumper.stream.flush();
+        }
     }
 
     // ----- State commit policy ----------------------------------------
