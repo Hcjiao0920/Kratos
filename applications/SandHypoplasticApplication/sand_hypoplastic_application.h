@@ -12,6 +12,7 @@
 #include "sand_hypoplastic_application_variables.h"
 #include "custom_constitutive/path_a_fortran_dll/sand_hypoplastic_fortran_dll_law.h"
 #include "custom_constitutive/path_b_cpp_port/sand_hypoplastic_cpp_law.h"
+#include "custom_constitutive/path_b_cpp_port/sand_hypoplastic_cpp_law_2d_plane_strain.h"
 
 namespace Kratos
 {
@@ -37,8 +38,9 @@ public:
     }
 
 private:
-    const SandHypoplasticFortranDllLaw mSandHypoplasticFortranDllLaw;
-    const SandHypoplasticCppLaw        mSandHypoplasticCppLaw;
+    const SandHypoplasticFortranDllLaw            mSandHypoplasticFortranDllLaw;
+    const SandHypoplasticCppLaw                   mSandHypoplasticCppLaw;
+    const SandHypoplasticCppLaw2DPlaneStrain      mSandHypoplasticCppLaw2DPlaneStrain;
 };
 
 } // namespace Kratos
