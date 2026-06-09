@@ -718,21 +718,16 @@ CheckRkfResult check_RKF(const double* y, const Parms16& parms) {
     r.error  = 0;
     r.failed = nullptr;
 
-    const double p_t       = parms[1];
-    const double minstress = p_t / 4.0;
+    // F18 (2026-05-12): admissibility check operates on RAW sig (not
+    // sig_star). p_t (parms[1]) remains a parameter used elsewhere in
+    // the kernel (eta = sig_star/I1 in get_tan / rhs) for the model's
+    // own regularization, but not in the admissibility threshold. See
+    // the long-form rationale below this block. parms is otherwise
+    // unused at this point.
+    (void)parms;
 
-    // sig from y[0..5].
+    // sig from y[0..5] (tension-positive Voigt-Abaqus order).
     const double sig[6] = {y[0], y[1], y[2], y[3], y[4], y[5]};
-
-    // Cohesion-shifted stress: sig_star = sig - p_t * I.
-    const double sig_star[6] = {
-        sig[0] - p_t,
-        sig[1] - p_t,
-        sig[2] - p_t,
-        sig[3],
-        sig[4],
-        sig[5]
-    };
 
     // Failed-label precedence (deviation from Fortran's single-bit
     // error_RKF return; Codex review 2026-05-02 P1 finding):
@@ -765,18 +760,63 @@ CheckRkfResult check_RKF(const double* y, const Parms16& parms) {
     // Within each class, first-failure-wins still applies (pmean
     // takes precedence over tension; nan over void).
 
-    // Mean stress (compression-positive). Fortran: pmean = -tr(sig_star)/3.
-    r.pmean = -(sig_star[0] + sig_star[1] + sig_star[2]) / 3.0;
-    if (r.pmean <= minstress) {
+    // F18 deviation (2026-05-12, user request): tensile check on RAW
+    // sig, not on sig_star.
+    //
+    // Fortran umat reference checks pmean and the most-tensile principal
+    // of sig_star = sig - p_t * I. With p_t > 0 this gives the model an
+    // effective "tensile capacity" of ~+3*p_t/4 -- raw sig can have one
+    // principal up to +0.75 kPa tensile (with the default p_t=1) and
+    // still be accepted as "non-tensile". For COHESIONLESS materials
+    // (Toyoura sand etc.) this default is unphysical: the Wolffersdorff
+    // model's L matrix is ill-defined for tensile states (eta =
+    // sig_star/I1 has the wrong sign of I1), so the model SHOULD route
+    // any genuinely tensile principal to calc_elasti via the failure
+    // label. The sig_star-based check fails to do so when the tensile
+    // principal is within the p_t-shift band.
+    //
+    // The empirical failure mode (Path B granular_flow_3D_pathb,
+    // 2026-05-12): a corner MP at the column top (free face, no
+    // overburden) drifted to raw sig = [+0.62, +0.03, +0.11, -0.30,
+    // ~0, ~0] kPa, with raw-sig principals = [+0.745, +0.11, -0.096].
+    // Two of three principals are tensile in tension-positive. But
+    // sig_star (with p_t=1) shifted them all to [-0.255, -0.89,
+    // -1.095], yielding min_principal = +0.255 in kernel terms, JUST
+    // above minstress=0.25 by 5 Pa. The kernel ran the main hypoplastic
+    // path on a physically untenable state.
+    //
+    // F18 fix: compute pmean and principal_stresses_3 from raw `sig`,
+    // with threshold zero (any tensile principal triggers calc_elasti).
+    // p_t remains used elsewhere in the kernel (sig_star feeds into
+    // eta / L / fb normalization where its regularization role is
+    // appropriate), but the *admissibility* check uses the
+    // mathematically correct quantity (raw sig).
+    //
+    // Equivalent semantics: "the model is admissible iff all principal
+    // stresses of raw sig are compressive (negative in tension-positive
+    // convention)". This matches the textbook statement that sand
+    // hypoplastic requires compressive stress.
+    //
+    // Behavior change vs Fortran umat reference: states with mean
+    // stress comfortably compressive but ONE principal slightly tensile
+    // (e.g., highly anisotropic deviatoric loading near the failure
+    // surface) now route to calc_elasti. Under Fortran behavior they
+    // would have run the main hypoplastic with a numerically pathological
+    // L matrix. This is a strictly safer behavior.
+    // Mean stress on RAW sig (compression-positive).
+    r.pmean = -(sig[0] + sig[1] + sig[2]) / 3.0;
+    if (r.pmean <= 0.0) {
         r.error  = 1;
         r.failed = "pmean";
     }
 
-    // Principal stresses; tmin = -max(S) (compression-positive), so the
-    // most-tensile principal of sig_star fails the threshold.
-    const PrincipalStresses ps = principal_stresses_3(sig_star);
+    // Principal stresses of RAW sig; min_principal = -max(eigenvalues),
+    // i.e., the compression-positive value of the LEAST-compressive
+    // principal. If any raw-sig principal is tensile (eigenvalue >= 0),
+    // min_principal <= 0 and we trip "tension".
+    const PrincipalStresses ps = principal_stresses_3(sig);
     r.min_principal = -ps.s[2];  // s[2] is the largest (most-tensile in tension-positive)
-    if (r.min_principal <= minstress) {
+    if (r.min_principal <= 0.0) {
         if (r.error == 0) {
             r.error  = 1;
             r.failed = "tension";
@@ -1509,6 +1549,97 @@ StepResult integrate_step(const double* sig_n,
         }
     }
     }  // end "if (input_corrupt) { ... } else { ... }"
+
+    // ---- F19 (2026-05-12) DP envelope cap on success output -----------
+    // Sand-hypoplastic is rate-form with no explicit yield surface, so
+    // the RKF integrator can produce small-but-nonzero deviatoric stress
+    // in regions where pmean -> 0 (free-surface MPM particles). Those
+    // residual deviators have q/p well above the Drucker-Prager envelope
+    // (q_max = M_DP * p where M_DP = 6 sin phi_c / (3 - sin phi_c)),
+    // which is physically meaningless: sand at zero confinement has zero
+    // shear strength. When such MPs feed their stress into Kratos MPM
+    // and the spurious internal forces accumulate at low-mass BG nodes,
+    // explicit dynamics destabilize the free surface and crash.
+    //
+    // MC (HenckyMCPlastic3DLaw) avoids this by construction: its radial-
+    // return projects every step onto the yield envelope, so q exactly
+    // tracks q_max at all p. We mimic that here as a post-RKF scrub.
+    //
+    // Empirical anchor: baseline 3D8N Bui column crashes at t=0.057s
+    // (sand-hypo) but reaches t=0.15s (MC) at otherwise identical setup.
+    // The pre-crash dump shows MP 49 (top-right free-surface corner)
+    // with sig = [-0.008, -0.027, -0.023, -0.015, 0, 0] kPa giving
+    // q/p = 1.58 -- 30% above the DP envelope at phi_c=30 (M_DP=1.2).
+    //
+    // No bulk-MP regression: column-base MPs at the same time step have
+    // q/p ~ 1.025, well below M_DP=1.2. The cap only intervenes where
+    // the deviator is already physically meaningless noise.
+    if (r.error == kErrorOk) {
+        const double p_out = -(r.sig[0] + r.sig[1] + r.sig[2]) / 3.0;
+        // F20 (2026-05-12): MORE AGGRESSIVE than F19. F19's q-cap (project
+        // deviator onto DP envelope) did NOT change the 3D8N Bui crash
+        // time -- the spurious-deviator hypothesis is empirically refuted.
+        // Try the strongest possible mirror of MC's free-surface behavior:
+        // when p < 1 kPa, set sigma = 0 entirely. If this still doesn't
+        // help, the constitutive STRESS output is provably not the crash
+        // trigger.
+        constexpr double kFreeSurfaceCapPressure = 1.0;  // kPa
+        if (p_out < kFreeSurfaceCapPressure) {
+            // F20 (2026-06-08 update / "F21"): zero sigma AND substitute a
+            // clean linear-elastic tangent. The original F20 only zeroed
+            // r.sig and left r.D as whatever the rate-form integrator
+            // produced at the ill-conditioned p->0 state. Explicit MPM
+            // didn't care (only sig goes into the internal force). Implicit
+            // Newton DID -- the spurious tangent at free-surface MPs
+            // contaminates the global stiffness matrix; at small MP counts
+            // (50) the system stays invertible, but at production density
+            // (800 MPs) sparse_lu silently fails at t~0.085s (EXIT=127).
+            //
+            // Cure: emit the same E=100 kPa, nu=0.48 linear-elastic
+            // tangent that F18's inittension fallback already uses
+            // (sand_hypoplastic_kernel.cpp:1424-1437). Physically: at
+            // zero confinement sand responds elastically to incoming
+            // strain until p climbs back above 1 kPa, then the regular
+            // hypoplastic kernel takes over. Mathematically: ensures the
+            // 6x6 D block contributed to the global K is well-conditioned
+            // (SPD with bounded condition number).
+            //
+            // Sigma stays at zero (the F20 enforcement -- sand at p=0
+            // has zero shear strength, period).
+            for (int i = 0; i < 6; ++i) r.sig[i] = 0.0;
+            const double youngel = 100.0;
+            const double nuel    = 0.48;
+            const auto el = calc_elasti(deps_np1, youngel, nuel);
+            for (int i = 0; i < 6; ++i) {
+                for (int j = 0; j < 6; ++j) {
+                    r.D[i][j] = el.D[i][j];
+                }
+            }
+        } else if (p_out > 0.0) {
+            const double dev0 = r.sig[0] + p_out;
+            const double dev1 = r.sig[1] + p_out;
+            const double dev2 = r.sig[2] + p_out;
+            const double J2 = 0.5 * (dev0 * dev0 + dev1 * dev1 + dev2 * dev2)
+                            + r.sig[3] * r.sig[3]
+                            + r.sig[4] * r.sig[4]
+                            + r.sig[5] * r.sig[5];
+            const double q_out = std::sqrt(3.0 * J2);
+            // parms[0] is phi_c in RADIANS at this point: check_parms()
+            // converts the raw degrees input in-place at line 53.
+            const double sin_phi = std::sin(parms[0]);
+            const double M_DP = 6.0 * sin_phi / (3.0 - sin_phi);
+            const double q_max = M_DP * p_out;
+            if (q_out > q_max && q_out > 0.0) {
+                const double scale = q_max / q_out;
+                r.sig[0] = -p_out + dev0 * scale;
+                r.sig[1] = -p_out + dev1 * scale;
+                r.sig[2] = -p_out + dev2 * scale;
+                r.sig[3] *= scale;
+                r.sig[4] *= scale;
+                r.sig[5] *= scale;
+            }
+        }
+    }
 
     // ---- dtsub write-back clamp (output-side guard) ----
     // The kernel rkf23_update's `r.dtsub` can exceed dtime as an
