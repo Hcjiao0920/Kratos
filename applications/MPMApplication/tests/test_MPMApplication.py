@@ -24,6 +24,7 @@ from mpm_test_factory import CooksMembraneUPIncompressibleTest as TCooksMembrane
 
 from mpm_test_factory import CLLinearElastic3DQuadTest as TCLLinearElastic3DQuadTest
 from mpm_test_factory import CLDispNewtonianFluidTest as TCLDispNewtonianFluidTest
+from mpm_test_factory import CLSandHypoplastic3DHexaTest as TCLSandHypoplastic3DHexaTest
 
 from mpm_test_factory import GravityApplicationTest as TGravityApplicationTest
 from mpm_test_factory import GravityTimeStepTableTest as TGravityTimeStepTableTest
@@ -117,6 +118,7 @@ def AssembleTestSuites():
 
     smallSuite.addTest(TCLLinearElastic3DQuadTest('test_execution'))
     smallSuite.addTest(TCLDispNewtonianFluidTest('test_execution'))
+    smallSuite.addTest(TCLSandHypoplastic3DHexaTest('test_execution'))
     smallSuite.addTest(TGravityApplicationTest('test_execution'))
     smallSuite.addTest(TGravityTimeStepTableTest('test_execution'))
 

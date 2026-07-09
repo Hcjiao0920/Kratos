@@ -77,6 +77,8 @@
 #include "custom_constitutive/hencky_borja_cam_clay_axisym_2D_law.hpp"
 #include "custom_constitutive/displacement_newtonian_fluid_3D_law.hpp"
 #include "custom_constitutive/displacement_newtonian_fluid_plane_strain_2D_law.hpp"
+#include "custom_constitutive/sand_hypoplastic_3D_law.hpp"
+#include "custom_constitutive/sand_hypoplastic_plane_strain_2D_law.hpp"
 
 //---flow rules
 #include "custom_constitutive/flow_rules/mc_plastic_flow_rule.hpp"
@@ -307,6 +309,9 @@ private:
     // CL: Displacement-based Newtonian Fluid
     const DispNewtonianFluid3DLaw                           mDispNewtonianFluid3DLaw;
     const DispNewtonianFluidPlaneStrain2DLaw                mDispNewtonianFluidPlaneStrain2DLaw;
+    // CL: Sand hypoplasticity
+    const SandHypoplastic3DLaw                              mSandHypoplastic3DLaw;
+    const SandHypoplasticPlaneStrain2DLaw                   mSandHypoplasticPlaneStrain2DLaw;
     // Flow Rules
     const MCPlasticFlowRule                         mMCPlasticFlowRule;
     const MCStrainSofteningPlasticFlowRule          mMCStrainSofteningPlasticFlowRule;

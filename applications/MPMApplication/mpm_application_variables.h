@@ -84,6 +84,12 @@ namespace Kratos
     // CL: Solid
     KRATOS_DEFINE_APPLICATION_VARIABLE( MPM_APPLICATION, double, RAYLEIGH_ALPHA )
     KRATOS_DEFINE_APPLICATION_VARIABLE( MPM_APPLICATION, double, RAYLEIGH_BETA )
+    // CL: Sand hypoplasticity
+    // 16-component material parameter vector of the sand hypoplasticity laws
+    // (von Wolffersdorff model with intergranular strain). Component order is
+    // documented in sand_hypoplastic_kernel.hpp; the vector size is validated
+    // in the laws' Check().
+    KRATOS_DEFINE_APPLICATION_VARIABLE( MPM_APPLICATION, Vector, SAND_HYPOPLASTIC_PARAMETERS )
     // CL: Mohr Coulomb
     KRATOS_DEFINE_APPLICATION_VARIABLE( MPM_APPLICATION, double, COHESION )
     KRATOS_DEFINE_APPLICATION_VARIABLE( MPM_APPLICATION, double, INTERNAL_DILATANCY_ANGLE )

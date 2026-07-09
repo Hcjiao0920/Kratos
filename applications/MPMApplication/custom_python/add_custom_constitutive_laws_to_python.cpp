@@ -68,6 +68,8 @@
 #include "custom_constitutive/johnson_cook_thermal_plastic_axisym_2D_law.hpp"
 #include "custom_constitutive/displacement_newtonian_fluid_3D_law.hpp"
 #include "custom_constitutive/displacement_newtonian_fluid_plane_strain_2D_law.hpp"
+#include "custom_constitutive/sand_hypoplastic_3D_law.hpp"
+#include "custom_constitutive/sand_hypoplastic_plane_strain_2D_law.hpp"
 
 namespace Kratos{
 namespace Python{
@@ -227,6 +229,17 @@ namespace Python{
                 (m, "DispNewtonianFluidPlaneStrain2DLaw")
         .def(py::init<>())
             ;
+
+        // Sand hypoplasticity
+        py::class_< SandHypoplastic3DLaw, typename SandHypoplastic3DLaw::Pointer, ConstitutiveLaw >
+                (m, "SandHypoplastic3DLaw")
+        .def(py::init<>())
+                ;
+
+        py::class_< SandHypoplasticPlaneStrain2DLaw, typename SandHypoplasticPlaneStrain2DLaw::Pointer, ConstitutiveLaw >
+                (m, "SandHypoplasticPlaneStrain2DLaw")
+        .def(py::init<>())
+                ;
     }
 }  // namespace Python.
 }  // namespace Kratos.

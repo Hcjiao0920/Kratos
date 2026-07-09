@@ -91,6 +91,9 @@ class CLLinearElastic3DQuadTest(MPMTestFactory):
 class CLDispNewtonianFluidTest(MPMTestFactory):
     file_name = "cl_tests/fluid_cl/newtonian_fluid_test"
 
+class CLSandHypoplastic3DHexaTest(MPMTestFactory):
+    file_name = "cl_tests/solid_cl/sand_hypoplastic_3D_hexa_test"
+
 
 ### Friction tests
 class FrictionConformingTest(MPMTestFactory):

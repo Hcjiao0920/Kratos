@@ -189,6 +189,8 @@ namespace Kratos
         // CL: Solid
         KRATOS_REGISTER_VARIABLE( RAYLEIGH_ALPHA )
         KRATOS_REGISTER_VARIABLE( RAYLEIGH_BETA )
+        // CL: Sand hypoplasticity
+        KRATOS_REGISTER_VARIABLE( SAND_HYPOPLASTIC_PARAMETERS )
         // CL: Mohr Coulomb
         KRATOS_REGISTER_VARIABLE( COHESION )
         KRATOS_REGISTER_VARIABLE( INTERNAL_DILATANCY_ANGLE )
@@ -285,6 +287,9 @@ namespace Kratos
         // CL: Newtonian fluid
         KRATOS_REGISTER_CONSTITUTIVE_LAW("DispNewtonianFluid3DLaw", mDispNewtonianFluid3DLaw);
         KRATOS_REGISTER_CONSTITUTIVE_LAW("DispNewtonianFluidPlaneStrain2DLaw", mDispNewtonianFluidPlaneStrain2DLaw);
+        // CL: Sand hypoplasticity
+        KRATOS_REGISTER_CONSTITUTIVE_LAW("SandHypoplastic3DLaw", mSandHypoplastic3DLaw);
+        KRATOS_REGISTER_CONSTITUTIVE_LAW("SandHypoplasticPlaneStrain2DLaw", mSandHypoplasticPlaneStrain2DLaw);
 
         //Register Flow Rules
         Serializer::Register("MCPlasticFlowRule", mMCPlasticFlowRule);

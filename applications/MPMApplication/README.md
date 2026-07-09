@@ -85,6 +85,7 @@ The following features are currently available and subject to development within
     * [Modified Cam-Clay](https://kratosmultiphysics.github.io/Kratos/pages/Applications/MPM_Application/Constitutive_Laws/constitutive_laws.html#modified-cam-clay) - finite strain, plane strain, axis-symmetric, and 3D
     * Johnson Cook Thermal Plastic (just for explicit MPM)
 * Displacement-based [Newtonian Fluid Law](https://kratosmultiphysics.github.io/Kratos/pages/Applications/MPM_Application/Constitutive_Laws/constitutive_laws.html#newtonian-fluid) - plane strain and 3D
+* [Sand Hypoplasticity](https://kratosmultiphysics.github.io/Kratos/pages/Applications/MPM_Application/Constitutive_Laws/constitutive_laws.html#sand-hypoplasticity) (von Wolffersdorff, with intergranular strain) - finite strain, plane strain and 3D
 
 **Boundary conditions**
 * Grid-Based Conditions (conforming): applied directly at the background nodes

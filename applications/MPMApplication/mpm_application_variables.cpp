@@ -50,6 +50,8 @@ namespace Kratos
     // CL: Solid
     KRATOS_CREATE_VARIABLE( double, RAYLEIGH_ALPHA )
     KRATOS_CREATE_VARIABLE( double, RAYLEIGH_BETA )
+    // CL: Sand hypoplasticity
+    KRATOS_CREATE_VARIABLE( Vector, SAND_HYPOPLASTIC_PARAMETERS )
     // CL: Mohr Coulomb
     KRATOS_CREATE_VARIABLE( double, COHESION )
     KRATOS_CREATE_VARIABLE( double, INTERNAL_DILATANCY_ANGLE )
